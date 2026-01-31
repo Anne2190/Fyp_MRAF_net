@@ -1,0 +1,21 @@
+# MRAF-Net GUI Requirements
+# Install with: pip install -r requirements.txt
+
+# Core Deep Learning
+torch>=2.0.0
+torchvision>=0.15.0
+numpy>=1.24.0
+scipy>=1.10.0
+
+# Medical Imaging
+nibabel>=5.0.0
+
+# GUI Framework
+gradio>=4.0.0
+
+# Visualization
+matplotlib>=3.7.0
+Pillow>=10.0.0
+
+# Data Processing
+pandas>=2.0.0
