@@ -491,7 +491,7 @@ def create_interface():
         # Header
         gr.HTML("""
         <div class="header-text">
-            <h1>🧠 MRAF-Net</h1>
+            <h1>MRAF-Net</h1>
             <h3>Multi-Resolution Aligned and Robust Fusion Network for Brain Tumor Segmentation</h3>
             <p>BEng Software Engineering | University of Westminster | IIT</p>
             <p>Anne Nidhusha Nithiyalan (w1985740) | Supervisor: Ms. Mohanadas Jananie</p>
