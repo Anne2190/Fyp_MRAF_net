@@ -32,7 +32,8 @@ import torch.nn.functional as F
 from PIL import Image
 
 # Add parent directory to path to import src modules
-sys.path.insert(0, str(Path(__file__).parent.parent))
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.models.mraf_net import MRAFNet, create_model
 
@@ -41,7 +42,8 @@ from src.models.mraf_net import MRAFNet, create_model
 # ============================================================================
 
 CONFIG = {
-    "model_path": "experiments/mraf_net_20260124_130245/checkpoints/best_model.pth",
+    # Use absolute path relative to project root
+    "model_path": str(PROJECT_ROOT / "experiments/mraf_net_20260124_130245/checkpoints/best_model.pth"),
     "device": "cuda" if torch.cuda.is_available() else "cpu",
     "colors": {
         0: [0, 0, 0, 0],
