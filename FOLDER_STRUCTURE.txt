@@ -1,0 +1,56 @@
+MRAF-NET PROJECT FOLDER STRUCTURE
+===================================
+
+mraf_net/
+│
+├── README.md                    # Setup and usage instructions
+├── requirements.txt             # Python dependencies
+├── setup.sh                     # Linux/Mac setup script
+├── setup.bat                    # Windows setup script
+│
+├── config/
+│   └── config.yaml              # Training configuration
+│
+├── data/
+│   ├── README.md                # Data download instructions
+│   └── brats2020/               # Place BraTS dataset here
+│       ├── MICCAI_BraTS2020_TrainingData/
+│       └── MICCAI_BraTS2020_ValidationData/
+│
+├── src/
+│   ├── __init__.py
+│   │
+│   ├── models/
+│   │   ├── __init__.py
+│   │   ├── mraf_net.py          # Main MRAF-Net architecture
+│   │   ├── encoder.py           # Multi-resolution encoder
+│   │   ├── decoder.py           # Attention-enhanced decoder
+│   │   ├── attention.py         # Attention mechanisms (CBAM, AG)
+│   │   └── fusion.py            # Cross-modality fusion module
+│   │
+│   ├── data/
+│   │   ├── __init__.py
+│   │   ├── dataset.py           # BraTS dataset loader
+│   │   ├── transforms.py        # Data augmentation
+│   │   └── preprocessing.py     # MRI preprocessing utilities
+│   │
+│   ├── losses/
+│   │   ├── __init__.py
+│   │   └── losses.py            # Dice, CE, combined losses
+│   │
+│   └── utils/
+│       ├── __init__.py
+│       ├── metrics.py           # Evaluation metrics
+│       └── helpers.py           # Utility functions
+│
+├── scripts/
+│   ├── train.py                 # Main training script
+│   ├── evaluate.py              # Model evaluation script
+│   ├── predict.py               # Inference script
+│   └── prepare_data.py          # Data preparation script
+│
+├── checkpoints/                 # Saved models (created during training)
+│
+├── logs/                        # Training logs (created during training)
+│
+└── outputs/                     # Predictions and visualizations

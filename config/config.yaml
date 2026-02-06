@@ -68,7 +68,7 @@ training:
   batch_size: 1
   
   # Number of training epochs
-  epochs: 3   # 300
+  epochs: 100   # 300
   
   # Initial learning rate
   learning_rate: 0.0001

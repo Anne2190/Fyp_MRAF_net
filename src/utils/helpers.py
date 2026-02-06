@@ -120,7 +120,7 @@ def load_checkpoint(
     if device is None:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
-    checkpoint = torch.load(checkpoint_path, map_location=device)
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     
     model.load_state_dict(checkpoint['model_state_dict'])
     

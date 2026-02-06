@@ -31,203 +31,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 from PIL import Image
 
+# Add parent directory to path to import src modules
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
-# ============================================================================
-# MODEL ARCHITECTURE (Self-contained)
-# ============================================================================
-
-class ConvBlock(nn.Module):
-    """Basic convolutional block."""
-    def __init__(self, in_channels, out_channels, kernel_size=3, padding=1):
-        super().__init__()
-        self.conv1 = nn.Conv3d(in_channels, out_channels, kernel_size, padding=padding)
-        self.bn1 = nn.InstanceNorm3d(out_channels)
-        self.conv2 = nn.Conv3d(out_channels, out_channels, kernel_size, padding=padding)
-        self.bn2 = nn.InstanceNorm3d(out_channels)
-        self.relu = nn.LeakyReLU(0.01, inplace=True)
-        
-    def forward(self, x):
-        x = self.relu(self.bn1(self.conv1(x)))
-        x = self.relu(self.bn2(self.conv2(x)))
-        return x
-
-
-class EncoderBlock(nn.Module):
-    """Encoder block with downsampling."""
-    def __init__(self, in_channels, out_channels):
-        super().__init__()
-        self.conv = ConvBlock(in_channels, out_channels)
-        self.pool = nn.MaxPool3d(2)
-        
-    def forward(self, x):
-        features = self.conv(x)
-        pooled = self.pool(features)
-        return pooled, features
-
-
-class DecoderBlock(nn.Module):
-    """Decoder block with upsampling."""
-    def __init__(self, in_channels, out_channels):
-        super().__init__()
-        self.up = nn.ConvTranspose3d(in_channels, out_channels, kernel_size=2, stride=2)
-        self.conv = ConvBlock(out_channels * 2, out_channels)
-        
-    def forward(self, x, skip):
-        x = self.up(x)
-        # Handle size mismatch
-        if x.shape != skip.shape:
-            x = F.interpolate(x, size=skip.shape[2:], mode='trilinear', align_corners=True)
-        x = torch.cat([x, skip], dim=1)
-        return self.conv(x)
-
-
-class AttentionBlock(nn.Module):
-    """Attention gate for skip connections."""
-    def __init__(self, F_g, F_l, F_int):
-        super().__init__()
-        self.W_g = nn.Sequential(
-            nn.Conv3d(F_g, F_int, kernel_size=1),
-            nn.InstanceNorm3d(F_int)
-        )
-        self.W_x = nn.Sequential(
-            nn.Conv3d(F_l, F_int, kernel_size=1),
-            nn.InstanceNorm3d(F_int)
-        )
-        self.psi = nn.Sequential(
-            nn.Conv3d(F_int, 1, kernel_size=1),
-            nn.InstanceNorm3d(1),
-            nn.Sigmoid()
-        )
-        self.relu = nn.LeakyReLU(0.01, inplace=True)
-        
-    def forward(self, g, x):
-        g1 = self.W_g(g)
-        x1 = self.W_x(x)
-        if g1.shape[2:] != x1.shape[2:]:
-            g1 = F.interpolate(g1, size=x1.shape[2:], mode='trilinear', align_corners=True)
-        psi = self.relu(g1 + x1)
-        psi = self.psi(psi)
-        return x * psi
-
-
-class ModalityFusion(nn.Module):
-    """Cross-modality attention fusion module."""
-    def __init__(self, channels):
-        super().__init__()
-        self.channel_attention = nn.Sequential(
-            nn.AdaptiveAvgPool3d(1),
-            nn.Conv3d(channels, channels // 4, 1),
-            nn.LeakyReLU(0.01),
-            nn.Conv3d(channels // 4, channels, 1),
-            nn.Sigmoid()
-        )
-        
-    def forward(self, x):
-        attention = self.channel_attention(x)
-        return x * attention
-
-
-class MRAFNet(nn.Module):
-    """
-    MRAF-Net: Multi-Resolution Aligned and Robust Fusion Network
-    
-    Architecture for brain tumor segmentation from multi-modal MRI.
-    """
-    
-    def __init__(self, in_channels=4, num_classes=4, base_features=32, deep_supervision=False):
-        super().__init__()
-        
-        self.deep_supervision = deep_supervision
-        f = base_features
-        
-        # Modality-specific initial processing
-        self.modality_encoders = nn.ModuleList([
-            nn.Sequential(
-                nn.Conv3d(1, f // 4, 3, padding=1),
-                nn.InstanceNorm3d(f // 4),
-                nn.LeakyReLU(0.01)
-            ) for _ in range(in_channels)
-        ])
-        
-        # Fusion
-        self.fusion = ModalityFusion(f)
-        
-        # Encoder path
-        self.enc1 = EncoderBlock(f, f)
-        self.enc2 = EncoderBlock(f, f * 2)
-        self.enc3 = EncoderBlock(f * 2, f * 4)
-        self.enc4 = EncoderBlock(f * 4, f * 8)
-        
-        # Bottleneck
-        self.bottleneck = ConvBlock(f * 8, f * 16)
-        
-        # Attention gates
-        self.att4 = AttentionBlock(f * 16, f * 8, f * 4)
-        self.att3 = AttentionBlock(f * 8, f * 4, f * 2)
-        self.att2 = AttentionBlock(f * 4, f * 2, f)
-        self.att1 = AttentionBlock(f * 2, f, f // 2)
-        
-        # Decoder path
-        self.dec4 = DecoderBlock(f * 16, f * 8)
-        self.dec3 = DecoderBlock(f * 8, f * 4)
-        self.dec2 = DecoderBlock(f * 4, f * 2)
-        self.dec1 = DecoderBlock(f * 2, f)
-        
-        # Output
-        self.output = nn.Conv3d(f, num_classes, 1)
-        
-        # Deep supervision outputs
-        if deep_supervision:
-            self.ds4 = nn.Conv3d(f * 8, num_classes, 1)
-            self.ds3 = nn.Conv3d(f * 4, num_classes, 1)
-            self.ds2 = nn.Conv3d(f * 2, num_classes, 1)
-    
-    def forward(self, x):
-        # Process each modality
-        modality_features = []
-        for i, encoder in enumerate(self.modality_encoders):
-            mod_input = x[:, i:i+1, :, :, :]
-            modality_features.append(encoder(mod_input))
-        
-        # Concatenate and fuse
-        combined = torch.cat(modality_features, dim=1)
-        fused = self.fusion(combined)
-        
-        # Encoder
-        x1, skip1 = self.enc1(fused)
-        x2, skip2 = self.enc2(x1)
-        x3, skip3 = self.enc3(x2)
-        x4, skip4 = self.enc4(x3)
-        
-        # Bottleneck
-        bottleneck = self.bottleneck(x4)
-        
-        # Decoder with attention
-        skip4_att = self.att4(bottleneck, skip4)
-        d4 = self.dec4(bottleneck, skip4_att)
-        
-        skip3_att = self.att3(d4, skip3)
-        d3 = self.dec3(d4, skip3_att)
-        
-        skip2_att = self.att2(d3, skip2)
-        d2 = self.dec2(d3, skip2_att)
-        
-        skip1_att = self.att1(d2, skip1)
-        d1 = self.dec1(d2, skip1_att)
-        
-        # Output
-        out = self.output(d1)
-        
-        # Deep supervision
-        ds_outputs = None
-        if self.deep_supervision and self.training:
-            ds4 = F.interpolate(self.ds4(d4), size=out.shape[2:], mode='trilinear', align_corners=True)
-            ds3 = F.interpolate(self.ds3(d3), size=out.shape[2:], mode='trilinear', align_corners=True)
-            ds2 = F.interpolate(self.ds2(d2), size=out.shape[2:], mode='trilinear', align_corners=True)
-            ds_outputs = [ds4, ds3, ds2]
-        
-        return out, ds_outputs
-
+from src.models.mraf_net import MRAFNet, create_model
 
 # ============================================================================
 # CONFIGURATION
@@ -263,16 +70,25 @@ class ModelHandler:
             if not os.path.exists(checkpoint_path):
                 return f"❌ File not found: {checkpoint_path}"
             
-            # Create model
-            self.model = MRAFNet(
-                in_channels=4,
-                num_classes=4,
-                base_features=32,
-                deep_supervision=False
-            )
+            # Create config to match training setup
+            # IMPORTANT: deep_supervision=True to match checkpoint architecture
+            config = {
+                'data': {
+                    'in_channels': 4,
+                    'num_classes': 4
+                },
+                'model': {
+                    'base_features': 32,
+                    'deep_supervision': True,  # Must match checkpoint
+                    'dropout': 0.0
+                }
+            }
+            
+            # Create model using the actual architecture
+            self.model = create_model(config)
             
             # Load weights
-            checkpoint = torch.load(checkpoint_path, map_location=self.device)
+            checkpoint = torch.load(checkpoint_path, map_location=self.device, weights_only=False)
             self.model.load_state_dict(checkpoint["model_state_dict"])
             self.model.to(self.device)
             self.model.eval()
@@ -281,8 +97,9 @@ class ModelHandler:
             
             metrics = checkpoint.get("metrics", {})
             dice = metrics.get("dice_mean", "N/A")
+            dice_str = f"{dice:.4f}" if isinstance(dice, float) else str(dice)
             
-            return f"✅ Model loaded!\n📍 Device: {self.device}\n📊 Dice: {dice:.4f if isinstance(dice, float) else dice}"
+            return f"✅ Model loaded!\n📍 Device: {self.device}\n📊 Dice: {dice_str}"
             
         except Exception as e:
             return f"❌ Error: {str(e)}"
@@ -297,7 +114,10 @@ class ModelHandler:
             images_t = np.transpose(images, (0, 3, 1, 2))
             tensor = torch.from_numpy(images_t).float().unsqueeze(0).to(self.device)
             
+            # Forward pass (returns tuple: main_output, ds_outputs)
             output, _ = self.model(tensor)
+            if isinstance(output, tuple):
+                output = output[0]
             pred = torch.argmax(F.softmax(output, dim=1), dim=1)
             pred_np = pred.squeeze(0).cpu().numpy()
             

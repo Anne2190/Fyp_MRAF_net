@@ -33,6 +33,11 @@ import torch
 import torch.nn.functional as F
 from PIL import Image
 
+# Add parent directory to path to import src modules
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from src.models.mraf_net import MRAFNet, create_model
+
 
 # ============================================================================
 # CONFIGURATION
@@ -74,19 +79,25 @@ class MRAFNetModel:
     def load(self, checkpoint_path: str) -> str:
         """Load model from checkpoint."""
         try:
-            # Import model architecture
-            from src.models.mraf_net import MRAFNet
+            # Create config to match training setup
+            # IMPORTANT: deep_supervision=True to match checkpoint architecture
+            config = {
+                'data': {
+                    'in_channels': 4,
+                    'num_classes': CONFIG["num_classes"]
+                },
+                'model': {
+                    'base_features': 32,
+                    'deep_supervision': True,  # Must match checkpoint
+                    'dropout': 0.0
+                }
+            }
             
-            # Initialize model
-            self.model = MRAFNet(
-                in_channels=4,
-                num_classes=CONFIG["num_classes"],
-                base_features=32,
-                deep_supervision=False
-            )
+            # Create model using the actual architecture
+            self.model = create_model(config)
             
             # Load checkpoint
-            checkpoint = torch.load(checkpoint_path, map_location=self.device)
+            checkpoint = torch.load(checkpoint_path, map_location=self.device, weights_only=False)
             self.model.load_state_dict(checkpoint["model_state_dict"])
             self.model.to(self.device)
             self.model.eval()
@@ -97,8 +108,9 @@ class MRAFNetModel:
             epoch = checkpoint.get("epoch", "N/A")
             metrics = checkpoint.get("metrics", {})
             dice = metrics.get("dice_mean", "N/A")
+            dice_str = f"{dice:.4f}" if isinstance(dice, float) else str(dice)
             
-            return f"✅ Model loaded successfully!\n📍 Device: {self.device}\n📊 Training Dice: {dice:.4f if isinstance(dice, float) else dice}"
+            return f"✅ Model loaded successfully!\n📍 Device: {self.device}\n📊 Training Dice: {dice_str}"
             
         except Exception as e:
             self.loaded = False
@@ -114,8 +126,10 @@ class MRAFNetModel:
             images_t = np.transpose(images, (0, 3, 1, 2))
             tensor = torch.from_numpy(images_t).float().unsqueeze(0).to(self.device)
             
-            # Forward pass
+            # Forward pass (returns tuple: main_output, ds_outputs)
             output, _ = self.model(tensor)
+            if isinstance(output, tuple):
+                output = output[0]
             
             # Get prediction
             pred = torch.argmax(F.softmax(output, dim=1), dim=1)

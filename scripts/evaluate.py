@@ -104,7 +104,7 @@ class Evaluator:
         self.model = self.model.to(self.device)
         
         # Load checkpoint
-        checkpoint = torch.load(self.checkpoint_path, map_location=self.device)
+        checkpoint = torch.load(self.checkpoint_path, map_location=self.device, weights_only=False)
         self.model.load_state_dict(checkpoint['model_state_dict'])
         self.model.eval()
         
