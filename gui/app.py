@@ -110,11 +110,11 @@ class MRAFNetModel:
             dice = metrics.get("dice_mean", "N/A")
             dice_str = f"{dice:.4f}" if isinstance(dice, float) else str(dice)
             
-            return f"✅ Model loaded successfully!\n📍 Device: {self.device}\n📊 Training Dice: {dice_str}"
+            return f"✓ Model loaded successfully\n▸ Device: {self.device}\n▸ Training Dice: {dice_str}"
             
         except Exception as e:
             self.loaded = False
-            return f"❌ Error loading model: {str(e)}"
+            return f"✗ Error loading model: {str(e)}"
     
     def predict(self, images: np.ndarray) -> np.ndarray:
         """Run prediction on preprocessed images."""
@@ -266,10 +266,10 @@ def compute_tumor_metrics(segmentation: np.ndarray,
 def load_model_handler(checkpoint_path: str) -> str:
     """Handle model loading."""
     if not checkpoint_path:
-        return "⚠️ Please provide a checkpoint path"
+        return "⚠ Please provide a checkpoint path"
     
     if not os.path.exists(checkpoint_path):
-        return f"❌ File not found: {checkpoint_path}"
+        return f"✗ File not found: {checkpoint_path}"
     
     return model.load(checkpoint_path)
 
@@ -277,10 +277,10 @@ def load_model_handler(checkpoint_path: str) -> str:
 def process_mri_files(flair_file, t1_file, t1ce_file, t2_file, gt_file=None):
     """Process uploaded MRI files."""
     if not all([flair_file, t1_file, t1ce_file, t2_file]):
-        return None, None, None, "⚠️ Please upload all 4 MRI modalities"
+        return None, None, None, "⚠ Please upload all 4 MRI modalities"
     
     if not model.loaded:
-        return None, None, None, "❌ Please load a model first"
+        return None, None, None, "✗ Please load a model first"
     
     try:
         # Load files
@@ -332,7 +332,7 @@ def process_mri_files(flair_file, t1_file, t1ce_file, t2_file, gt_file=None):
         
     except Exception as e:
         import traceback
-        return None, None, None, f"❌ Error: {str(e)}\n{traceback.format_exc()}"
+        return None, None, None, f"✗ Error: {str(e)}\n{traceback.format_exc()}"
 
 
 def update_slice_view(slice_idx: int, view: str, show_overlay: bool, alpha: float):
@@ -383,9 +383,9 @@ def get_max_slice(view: str) -> int:
 
 def format_metrics(metrics: Dict) -> str:
     """Format metrics for display."""
-    text = "## 📊 Segmentation Results\n\n"
+    text = "## Segmentation Results\n\n"
     
-    text += "### 📏 Tumor Volumes\n"
+    text += "### Tumor Volumes\n"
     text += f"| Region | Volume (ml) |\n"
     text += f"|--------|-------------|\n"
     text += f"| Whole Tumor (WT) | {metrics['volume']['whole_tumor_ml']:.2f} |\n"
@@ -395,7 +395,7 @@ def format_metrics(metrics: Dict) -> str:
     text += f"| Necrotic (NCR) | {metrics['volume']['necrotic_ml']:.2f} |\n\n"
     
     if "dice" in metrics:
-        text += "### 🎯 Dice Scores\n"
+        text += "### Dice Scores\n"
         text += f"| Region | Dice Score |\n"
         text += f"|--------|------------|\n"
         text += f"| Whole Tumor | {metrics['dice']['whole_tumor']:.4f} |\n"
@@ -450,7 +450,7 @@ def export_segmentation():
     global stored_data
     
     if stored_data is None:
-        return None, "⚠️ No segmentation to export"
+        return None, "⚠ No segmentation to export"
     
     # Create temp file
     output_path = tempfile.mktemp(suffix='.nii.gz')
@@ -461,7 +461,7 @@ def export_segmentation():
     )
     nib.save(nii, output_path)
     
-    return output_path, f"✅ Saved to: {output_path}"
+    return output_path, f"✓ Saved to: {output_path}"
 
 
 # Global storage
@@ -514,31 +514,31 @@ def create_interface():
         
         with gr.Tabs():
             # Tab 1: Segmentation
-            with gr.TabItem("🔬 Segmentation"):
+            with gr.TabItem("⊕ Segmentation"):
                 with gr.Row():
                     # Left column - Inputs
                     with gr.Column(scale=1):
-                        gr.Markdown("### 📁 Load Model")
+                        gr.Markdown("### ⎙ Load Model")
                         checkpoint_input = gr.Textbox(
                             label="Checkpoint Path",
                             value=CONFIG["model_path"],
                             placeholder="Path to model checkpoint"
                         )
-                        load_btn = gr.Button("🚀 Load Model", variant="primary")
+                        load_btn = gr.Button("⟳ Load Model", variant="primary")
                         model_status = gr.Textbox(label="Model Status", interactive=False)
                         
-                        gr.Markdown("### 📤 Upload MRI Scans")
+                        gr.Markdown("### ⇪ Upload MRI Scans")
                         flair_input = gr.File(label="FLAIR", file_types=[".nii", ".nii.gz"])
                         t1_input = gr.File(label="T1", file_types=[".nii", ".nii.gz"])
                         t1ce_input = gr.File(label="T1ce (Contrast)", file_types=[".nii", ".nii.gz"])
                         t2_input = gr.File(label="T2", file_types=[".nii", ".nii.gz"])
                         gt_input = gr.File(label="Ground Truth (Optional)", file_types=[".nii", ".nii.gz"])
                         
-                        run_btn = gr.Button("🧠 Run Segmentation", variant="primary", size="lg")
+                        run_btn = gr.Button("▶ Run Segmentation", variant="primary", size="lg")
                     
                     # Right column - Visualization
                     with gr.Column(scale=2):
-                        gr.Markdown("### 🖼️ Visualization")
+                        gr.Markdown("### ⊞ Visualization")
                         
                         with gr.Row():
                             view_select = gr.Radio(
@@ -565,23 +565,23 @@ def create_interface():
                 
                 # Metrics section
                 with gr.Row():
-                    metrics_output = gr.Markdown("### Upload MRI scans and run segmentation to see metrics")
+                    metrics_output = gr.Markdown("### ▸ Upload MRI scans and run segmentation to see metrics")
             
             # Tab 2: 3D Visualization
-            with gr.TabItem("🎮 3D View"):
+            with gr.TabItem("◈ 3D View"):
                 gr.Markdown("### 3D Tumor Visualization")
-                plot_btn = gr.Button("Generate 3D Plot")
+                plot_btn = gr.Button("⧉ Generate 3D Plot")
                 plot_output = gr.Plot(label="3D Visualization")
             
             # Tab 3: Export
-            with gr.TabItem("💾 Export"):
+            with gr.TabItem("⇓ Export"):
                 gr.Markdown("### Export Results")
                 export_btn = gr.Button("Export Segmentation (NIfTI)")
                 export_file = gr.File(label="Download")
                 export_status = gr.Textbox(label="Status", interactive=False)
             
             # Tab 4: About
-            with gr.TabItem("📖 About"):
+            with gr.TabItem("ℹ About"):
                 gr.Markdown("""
                 ## MRAF-Net: Multi-Resolution Aligned and Robust Fusion Network
                 
@@ -703,9 +703,9 @@ if __name__ == "__main__":
     
     # Check CUDA
     if torch.cuda.is_available():
-        print(f"✅ CUDA available: {torch.cuda.get_device_name(0)}")
+        print(f"✓ CUDA available: {torch.cuda.get_device_name(0)}")
     else:
-        print("⚠️ CUDA not available, using CPU")
+        print("⚠ CUDA not available, using CPU")
     
     # Create and launch interface
     demo = create_interface()

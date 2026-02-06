@@ -68,7 +68,7 @@ class ModelHandler:
         """Load model from checkpoint."""
         try:
             if not os.path.exists(checkpoint_path):
-                return f"❌ File not found: {checkpoint_path}"
+                return f"✗ File not found: {checkpoint_path}"
             
             # Create config to match training setup
             # IMPORTANT: deep_supervision=True to match checkpoint architecture
@@ -99,27 +99,54 @@ class ModelHandler:
             dice = metrics.get("dice_mean", "N/A")
             dice_str = f"{dice:.4f}" if isinstance(dice, float) else str(dice)
             
-            return f"✅ Model loaded!\n📍 Device: {self.device}\n📊 Dice: {dice_str}"
+            return f"✓ Model loaded successfully\n▸ Device: {self.device}\n▸ Dice Score: {dice_str}"
             
         except Exception as e:
-            return f"❌ Error: {str(e)}"
+            return f"✗ Error: {str(e)}"
     
-    def predict(self, images: np.ndarray) -> np.ndarray:
-        """Run inference."""
+    def predict(self, images: np.ndarray, batch_size: int = 16) -> np.ndarray:
+        """Run inference with batched processing to avoid OOM errors.
+        
+        Args:
+            images: Input images of shape (C, H, W, D)
+            batch_size: Number of slices to process at once (reduce if still OOM)
+        """
         if not self.loaded:
             raise RuntimeError("Model not loaded!")
         
+        # Clear GPU cache before inference
+        if self.device == "cuda":
+            torch.cuda.empty_cache()
+        
         with torch.no_grad():
-            # (C, H, W, D) -> (1, C, D, H, W)
+            # (C, H, W, D) -> (C, D, H, W)
             images_t = np.transpose(images, (0, 3, 1, 2))
-            tensor = torch.from_numpy(images_t).float().unsqueeze(0).to(self.device)
+            C, D, H, W = images_t.shape
             
-            # Forward pass (returns tuple: main_output, ds_outputs)
-            output, _ = self.model(tensor)
-            if isinstance(output, tuple):
-                output = output[0]
-            pred = torch.argmax(F.softmax(output, dim=1), dim=1)
-            pred_np = pred.squeeze(0).cpu().numpy()
+            # Initialize output array
+            pred_np = np.zeros((D, H, W), dtype=np.uint8)
+            
+            # Process in batches along depth dimension
+            for start_idx in range(0, D, batch_size):
+                end_idx = min(start_idx + batch_size, D)
+                
+                # Get batch: (1, C, batch_D, H, W)
+                batch = images_t[:, start_idx:end_idx, :, :]
+                tensor = torch.from_numpy(batch).float().unsqueeze(0).to(self.device)
+                
+                # Forward pass (returns tuple: main_output, ds_outputs)
+                output, _ = self.model(tensor)
+                if isinstance(output, tuple):
+                    output = output[0]
+                pred = torch.argmax(F.softmax(output, dim=1), dim=1)
+                
+                # Move to CPU immediately to free GPU memory
+                pred_batch = pred.squeeze(0).cpu().numpy()
+                pred_np[start_idx:end_idx, :, :] = pred_batch
+                
+                # Clear GPU cache after each batch
+                if self.device == "cuda":
+                    torch.cuda.empty_cache()
             
             # (D, H, W) -> (H, W, D)
             pred_np = np.transpose(pred_np, (1, 2, 0))
@@ -225,10 +252,10 @@ def run_segmentation(flair, t1, t1ce, t2, gt=None):
     global stored_data
     
     if not all([flair, t1, t1ce, t2]):
-        return None, 50, 100, "⚠️ Upload all 4 modalities"
+        return None, 50, 100, "⚠ Upload all 4 modalities"
     
     if not model.loaded:
-        return None, 50, 100, "❌ Load model first"
+        return None, 50, 100, "✗ Load model first"
     
     try:
         # Load files
@@ -266,7 +293,7 @@ def run_segmentation(flair, t1, t1ce, t2, gt=None):
         viz = create_overlay(flair_data[:, :, mid], segmentation[:, :, mid])
         
         # Format metrics
-        text = "## 📊 Results\n\n"
+        text = "## Results\n\n"
         text += "### Volumes (ml)\n"
         text += f"- Whole Tumor: **{metrics['volume']['wt']:.2f}**\n"
         text += f"- Tumor Core: **{metrics['volume']['tc']:.2f}**\n"
@@ -283,7 +310,7 @@ def run_segmentation(flair, t1, t1ce, t2, gt=None):
         
     except Exception as e:
         import traceback
-        return None, 50, 100, f"❌ Error: {e}\n{traceback.format_exc()}"
+        return None, 50, 100, f"✗ Error: {e}\n{traceback.format_exc()}"
 
 
 def update_view(slice_idx, view, overlay, alpha):
@@ -337,12 +364,12 @@ def create_3d():
 def export_seg():
     global stored_data
     if stored_data is None:
-        return None, "⚠️ No segmentation"
+        return None, "⚠ No segmentation available"
     
     path = tempfile.mktemp(suffix='.nii.gz')
     nii = nib.Nifti1Image(stored_data["seg"].astype(np.int16), stored_data["affine"])
     nib.save(nii, path)
-    return path, f"✅ Exported: {path}"
+    return path, f"✓ Exported successfully: {path}"
 
 
 # ============================================================================
@@ -358,7 +385,7 @@ def create_app():
         gr.HTML("""
         <div style="text-align:center; background:linear-gradient(135deg,#667eea,#764ba2); 
                     padding:25px; border-radius:10px; color:white; margin-bottom:20px;">
-            <h1 style="margin:0;">🧠 MRAF-Net</h1>
+            <h1 style="margin:0;">⚕ MRAF-Net</h1>
             <h3 style="margin:5px 0;">Multi-Resolution Aligned and Robust Fusion Network</h3>
             <p style="margin:5px 0;">Brain Tumor Segmentation from Multi-Modal MRI</p>
             <p style="font-size:0.9em;">Anne Nidhusha Nithiyalan | University of Westminster / IIT</p>
@@ -368,23 +395,23 @@ def create_app():
         with gr.Row():
             # Left Panel
             with gr.Column(scale=1):
-                gr.Markdown("### 🔧 Model")
+                gr.Markdown("### ⚙ Model Configuration")
                 model_path = gr.Textbox(label="Checkpoint", value=CONFIG["model_path"])
-                load_btn = gr.Button("Load Model", variant="primary")
+                load_btn = gr.Button("⟳ Load Model", variant="primary")
                 status = gr.Textbox(label="Status", lines=3, interactive=False)
                 
-                gr.Markdown("### 📤 Upload MRI")
+                gr.Markdown("### ⇪ Upload MRI Scans")
                 flair = gr.File(label="FLAIR", file_types=[".nii", ".nii.gz"])
                 t1 = gr.File(label="T1", file_types=[".nii", ".nii.gz"])
                 t1ce = gr.File(label="T1ce", file_types=[".nii", ".nii.gz"])
                 t2 = gr.File(label="T2", file_types=[".nii", ".nii.gz"])
                 gt = gr.File(label="Ground Truth (optional)", file_types=[".nii", ".nii.gz"])
                 
-                run_btn = gr.Button("🧠 Run Segmentation", variant="primary", size="lg")
+                run_btn = gr.Button("▶ Run Segmentation", variant="primary", size="lg")
             
             # Right Panel
             with gr.Column(scale=2):
-                gr.Markdown("### 🖼️ Visualization")
+                gr.Markdown("### ⊞ Visualization")
                 
                 with gr.Row():
                     view = gr.Radio(["Axial", "Coronal", "Sagittal"], value="Axial", label="View")
@@ -404,20 +431,20 @@ def create_app():
                 """)
         
         # Metrics
-        metrics_display = gr.Markdown("### 📊 Run segmentation to see metrics")
+        metrics_display = gr.Markdown("### Run segmentation to see metrics")
         
         # Tabs for extra features
         with gr.Tabs():
-            with gr.TabItem("🎮 3D View"):
-                plot_btn = gr.Button("Generate 3D Plot")
+            with gr.TabItem("◈ 3D View"):
+                plot_btn = gr.Button("⧉ Generate 3D Plot")
                 plot = gr.Plot()
             
-            with gr.TabItem("💾 Export"):
+            with gr.TabItem("⇓ Export"):
                 export_btn = gr.Button("Export Segmentation")
                 export_file = gr.File(label="Download")
                 export_status = gr.Textbox(label="Status", interactive=False)
             
-            with gr.TabItem("📖 About"):
+            with gr.TabItem("ℹ About"):
                 gr.Markdown("""
                 ## MRAF-Net Architecture
                 
