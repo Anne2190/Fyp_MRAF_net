@@ -14,6 +14,7 @@ from typing import List, Tuple, Optional, Dict
 from .encoder import MultiScaleEncoder, ModalityEncoder
 from .decoder import AttentionDecoder
 from .fusion import CrossModalityFusion
+from .swin_transformer import SwinBottleneck3D
 
 
 class MRAFNet(nn.Module):
@@ -41,7 +42,11 @@ class MRAFNet(nn.Module):
         num_classes: int = 4,
         base_features: int = 32,
         deep_supervision: bool = True,
-        dropout: float = 0.0
+        dropout: float = 0.0,
+        use_swin_bottleneck: bool = True,
+        swin_depth: int = 2,
+        swin_heads: int = 8,
+        swin_window_size: Tuple[int, int, int] = (2, 2, 2)
     ):
         super().__init__()
         
@@ -77,6 +82,17 @@ class MRAFNet(nn.Module):
             features=encoder_features,
             use_aspp=True
         )
+        
+        # Swin Transformer bottleneck for global context (NOVEL)
+        self.use_swin_bottleneck = use_swin_bottleneck
+        if use_swin_bottleneck:
+            self.swin_bottleneck = SwinBottleneck3D(
+                dim=encoder_features[-1],
+                depth=swin_depth,
+                num_heads=swin_heads,
+                window_size=swin_window_size,
+                mlp_ratio=4.0
+            )
         
         # Attention-enhanced decoder
         self.decoder = AttentionDecoder(
@@ -161,6 +177,17 @@ class MRAFNet(nn.Module):
             )
         else:
             encoder_features, bottleneck = self.encoder(fused)
+        
+        # Apply Swin Transformer at bottleneck for global context
+        if self.use_swin_bottleneck:
+            if self.use_checkpointing and self.training:
+                bottleneck = checkpoint(
+                    self.swin_bottleneck,
+                    bottleneck,
+                    use_reentrant=False
+                )
+            else:
+                bottleneck = self.swin_bottleneck(bottleneck)
         
         # Decoding with attention
         if self.deep_supervision and self.training:

@@ -290,3 +290,6 @@ core.*
 !README.md
 !LICENSE
 !CHANGELOG.md
+
+*.pdf
+walkthrough_2.md

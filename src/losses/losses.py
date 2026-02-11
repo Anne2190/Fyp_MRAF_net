@@ -9,6 +9,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import Optional, List
+from scipy.ndimage import distance_transform_edt
+import numpy as np
 
 
 class DiceLoss(nn.Module):
@@ -209,6 +211,131 @@ class DiceFocalLoss(nn.Module):
         return self.dice_weight * dice + self.focal_weight * focal
 
 
+class BoundaryLoss(nn.Module):
+    """
+    Boundary Loss based on distance maps (Novel for MRAF-Net).
+    
+    Penalizes predictions that are far from the ground-truth boundary.
+    Uses precomputed distance maps from ground truth segmentation masks.
+    This loss is particularly effective for improving Hausdorff Distance metrics
+    and achieving precise tumor boundary delineation.
+    
+    Reference: Kervadec et al., "Boundary loss for highly unbalanced segmentation", MIDL 2019.
+    
+    Args:
+        include_background: Whether to include background class.
+    """
+    
+    def __init__(self, include_background: bool = False):
+        super().__init__()
+        self.include_background = include_background
+    
+    @staticmethod
+    def _compute_distance_map(target: torch.Tensor, num_classes: int) -> torch.Tensor:
+        """
+        Compute signed distance maps from ground truth.
+        Positive values inside the region, negative outside.
+        
+        Args:
+            target: (B, D, H, W) integer labels
+            num_classes: number of classes
+        
+        Returns:
+            dist_maps: (B, C, D, H, W) distance maps per class
+        """
+        target_np = target.cpu().numpy().astype(np.uint8)
+        B = target_np.shape[0]
+        spatial_shape = target_np.shape[1:]
+        dist_maps = np.zeros((B, num_classes) + spatial_shape, dtype=np.float32)
+        
+        for b in range(B):
+            for c in range(num_classes):
+                mask = (target_np[b] == c).astype(np.uint8)
+                if mask.sum() == 0:
+                    # No voxels for this class — all negative (far away)
+                    dist_maps[b, c] = -np.ones(spatial_shape, dtype=np.float32)
+                elif mask.sum() == np.prod(spatial_shape):
+                    # All voxels belong to this class
+                    dist_maps[b, c] = np.ones(spatial_shape, dtype=np.float32)
+                else:
+                    # Signed distance: positive inside, negative outside
+                    pos_dist = distance_transform_edt(mask)
+                    neg_dist = distance_transform_edt(1 - mask)
+                    dist_maps[b, c] = pos_dist - neg_dist
+        
+        return torch.from_numpy(dist_maps)
+    
+    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            pred: (B, C, D, H, W) logits
+            target: (B, D, H, W) integer labels
+        
+        Returns:
+            Boundary loss scalar
+        """
+        num_classes = pred.shape[1]
+        pred_soft = F.softmax(pred, dim=1)
+        
+        # Compute distance maps
+        dist_maps = self._compute_distance_map(target, num_classes).to(pred.device)
+        
+        if not self.include_background:
+            pred_soft = pred_soft[:, 1:]
+            dist_maps = dist_maps[:, 1:]
+        
+        # Boundary loss: inner product of softmax predictions and distance maps
+        # Minimizing this encourages predictions to align with ground truth boundaries
+        boundary_loss = (pred_soft * dist_maps).mean()
+        
+        return boundary_loss
+
+
+class DiceFocalBoundaryLoss(nn.Module):
+    """
+    Combined Dice + Focal + Boundary Loss (Novel Composite).
+    
+    Combines regional overlap (Dice), per-voxel focus on hard examples (Focal),
+    and boundary alignment (Boundary) for comprehensive training signal.
+    
+    Args:
+        include_background: Whether to include background.
+        dice_weight: Weight for Dice component.
+        focal_weight: Weight for Focal component.
+        boundary_weight: Weight for Boundary component.
+        focal_gamma: Gamma for Focal Loss.
+    """
+    
+    def __init__(
+        self,
+        include_background: bool = False,
+        dice_weight: float = 1.0,
+        focal_weight: float = 1.0,
+        boundary_weight: float = 0.5,
+        focal_gamma: float = 2.0
+    ):
+        super().__init__()
+        
+        self.dice_loss = DiceLoss(include_background=include_background)
+        self.focal_loss = FocalLoss(gamma=focal_gamma)
+        self.boundary_loss = BoundaryLoss(include_background=include_background)
+        
+        self.dice_weight = dice_weight
+        self.focal_weight = focal_weight
+        self.boundary_weight = boundary_weight
+    
+    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        dice = self.dice_loss(pred, target)
+        focal = self.focal_loss(pred, target)
+        boundary = self.boundary_loss(pred, target)
+        
+        return (
+            self.dice_weight * dice
+            + self.focal_weight * focal
+            + self.boundary_weight * boundary
+        )
+
+
 class DeepSupervisionLoss(nn.Module):
     """
     Deep Supervision Loss for multi-scale outputs.
@@ -294,6 +421,13 @@ def get_loss_function(config: dict) -> nn.Module:
         base_loss = DiceFocalLoss(
             dice_weight=loss_config.get('dice_weight', 1.0),
             focal_weight=loss_config.get('focal_weight', 1.0),
+            focal_gamma=loss_config.get('focal_gamma', 2.0)
+        )
+    elif loss_name == 'dice_focal_boundary':
+        base_loss = DiceFocalBoundaryLoss(
+            dice_weight=loss_config.get('dice_weight', 1.0),
+            focal_weight=loss_config.get('focal_weight', 1.0),
+            boundary_weight=loss_config.get('boundary_weight', 0.5),
             focal_gamma=loss_config.get('focal_gamma', 2.0)
         )
     else:

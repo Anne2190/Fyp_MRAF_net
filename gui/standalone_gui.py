@@ -347,19 +347,21 @@ def create_3d():
     
     seg = stored_data["seg"][::3, ::3, ::3]
     
-    fig = plt.figure(figsize=(10, 8))
+    fig = plt.figure(figsize=(10, 8), facecolor='#0a0a0a')
     ax = fig.add_subplot(111, projection='3d')
+    ax.set_facecolor('#0a0a0a')
     
-    for label, color, name in [(1, 'green', 'NCR'), (2, 'yellow', 'Edema'), (4, 'red', 'ET')]:
+    for label, color, name in [(1, '#ffffff', 'NCR'), (2, '#aaaaaa', 'Edema'), (4, '#555555', 'ET')]:
         mask = seg == label
         if mask.any():
             coords = np.argwhere(mask)
             if len(coords) > 1500:
                 coords = coords[np.random.choice(len(coords), 1500, replace=False)]
-            ax.scatter(coords[:, 0], coords[:, 1], coords[:, 2], c=color, alpha=0.3, s=1, label=name)
+            ax.scatter(coords[:, 0], coords[:, 1], coords[:, 2], c=color, alpha=0.4, s=1, label=name)
     
-    ax.legend()
-    ax.set_title('3D Tumor Visualization')
+    ax.tick_params(colors='#666666')
+    ax.legend(facecolor='#1a1a1a', edgecolor='#333333', labelcolor='#cccccc')
+    ax.set_title('3D Tumor Visualization', color='#ffffff')
     return fig
 
 
@@ -381,16 +383,76 @@ def export_seg():
 def create_app():
     """Create Gradio interface."""
     
-    with gr.Blocks(title="MRAF-Net Brain Tumor Segmentation", theme=gr.themes.Soft()) as app:
+    # Custom CSS — Black & White MRI Theme
+    mri_css = """
+    .gradio-container {
+        max-width: 100% !important;
+        width: 100% !important;
+        margin: 0 auto !important;
+        padding: 0 40px !important;
+        background: #0a0a0a !important;
+        color: #e0e0e0 !important;
+        box-sizing: border-box !important;
+    }
+    body, .dark {
+        background: #0a0a0a !important;
+    }
+    .mri-header {
+        text-align: center;
+        background: radial-gradient(ellipse at center, #1a1a1a 0%, #000000 70%);
+        padding: 30px 20px;
+        border-radius: 4px;
+        color: #ffffff;
+        margin-bottom: 20px;
+        border: 1px solid #333333;
+        box-shadow: 0 0 40px rgba(255,255,255,0.03);
+    }
+    .mri-header h1 { font-weight:300; letter-spacing:6px; text-transform:uppercase; color:#fff; }
+    .mri-header h3 { font-weight:300; letter-spacing:2px; color:#aaa; }
+    .mri-header p  { color:#888; font-size:0.9em; }
+    .mri-legend {
+        background: #111; padding:12px 16px; border-radius:4px;
+        border: 1px solid #333; color:#ccc;
+    }
+    .gr-box, .gr-panel, .gr-form, .gr-input, .gr-padded {
+        background: #111111 !important; border-color: #333 !important; color: #e0e0e0 !important;
+    }
+    .gr-button-primary {
+        background: #fff !important; color: #000 !important; border: none !important; font-weight:600;
+    }
+    .gr-button-primary:hover { background: #ccc !important; }
+    .gr-button-secondary {
+        background: #1a1a1a !important; color: #e0e0e0 !important; border: 1px solid #444 !important;
+    }
+    label, .gr-check-radio, .label-wrap { color: #ccc !important; }
+    input, textarea, select {
+        background: #1a1a1a !important; color: #e0e0e0 !important; border-color: #333 !important;
+    }
+    .tabs .tab-nav button { color: #888 !important; background: transparent !important; }
+    .tabs .tab-nav button.selected { color: #fff !important; border-bottom: 2px solid #fff !important; }
+    .prose h1,.prose h2,.prose h3,.prose h4,.prose p,.prose li,.prose td,.prose th { color:#e0e0e0 !important; }
+    .prose table, .prose th, .prose td { border-color: #333 !important; }
+    .prose code { background:#1a1a1a !important; color:#ccc !important; }
+    .prose pre  { background:#0d0d0d !important; }
+    footer { display: none !important; }
+    """
+
+    mri_theme = gr.themes.Base(
+        primary_hue=gr.themes.Color(c50="#f5f5f5",c100="#e0e0e0",c200="#ccc",c300="#aaa",c400="#888",c500="#666",c600="#444",c700="#333",c800="#1a1a1a",c900="#0a0a0a",c950="#000"),
+        secondary_hue=gr.themes.Color(c50="#f5f5f5",c100="#e0e0e0",c200="#ccc",c300="#aaa",c400="#888",c500="#666",c600="#444",c700="#333",c800="#1a1a1a",c900="#0a0a0a",c950="#000"),
+        neutral_hue=gr.themes.Color(c50="#f5f5f5",c100="#e0e0e0",c200="#ccc",c300="#aaa",c400="#888",c500="#666",c600="#444",c700="#333",c800="#1a1a1a",c900="#0a0a0a",c950="#000"),
+    )
+
+    with gr.Blocks(title="MRAF-Net Brain Tumor Segmentation", css=mri_css, theme=mri_theme) as app:
         
         # Header
         gr.HTML("""
-        <div style="text-align:center; background:linear-gradient(135deg,#667eea,#764ba2); 
-                    padding:25px; border-radius:10px; color:white; margin-bottom:20px;">
-            <h1 style="margin:0;">⚕ MRAF-Net</h1>
-            <h3 style="margin:5px 0;">Multi-Resolution Aligned and Robust Fusion Network</h3>
-            <p style="margin:5px 0;">Brain Tumor Segmentation from Multi-Modal MRI</p>
-            <p style="font-size:0.9em;">Anne Nidhusha Nithiyalan | University of Westminster / IIT</p>
+        <div class="mri-header">
+            <h1 style="margin:0 0 8px 0;">⬡ MRAF-Net</h1>
+            <h3 style="margin:4px 0;">Multi-Resolution Aligned and Robust Fusion Network</h3>
+            <p style="margin:4px 0;">Brain Tumor Segmentation from Multi-Modal MRI</p>
+            <hr style="border:none;border-top:1px solid #333;margin:12px auto;width:60%;">
+            <p>Anne Nidhusha Nithiyalan &nbsp;|&nbsp; University of Westminster / IIT</p>
         </div>
         """)
         
@@ -424,11 +486,11 @@ def create_app():
                 image = gr.Image(label="Result", type="pil", height=450)
                 
                 gr.HTML("""
-                <div style="background:#f1f5f9;padding:10px;border-radius:8px;text-align:center;">
-                    <b>Legend:</b>
-                    <span style="color:green;">■ NCR/NET</span> |
-                    <span style="color:#DAA520;">■ Edema</span> |
-                    <span style="color:red;">■ Enhancing</span>
+                <div class="mri-legend" style="text-align:center;">
+                    <b style="color:#fff;">Legend:</b>&nbsp;&nbsp;
+                    <span style="color:#fff;border:1px solid #fff;padding:2px 8px;border-radius:2px;margin:0 4px;font-size:0.85em;">■ NCR/NET</span>
+                    <span style="color:#aaa;border:1px solid #aaa;padding:2px 8px;border-radius:2px;margin:0 4px;font-size:0.85em;">■ Edema</span>
+                    <span style="color:#666;border:1px solid #666;padding:2px 8px;border-radius:2px;margin:0 4px;font-size:0.85em;">■ Enhancing</span>
                 </div>
                 """)
         
@@ -474,8 +536,8 @@ def create_app():
         
         # Footer
         gr.HTML("""
-        <div style="text-align:center;padding:20px;color:#666;border-top:1px solid #eee;margin-top:20px;">
-            MRAF-Net © 2026 | Anne Nidhusha Nithiyalan | University of Westminster / IIT
+        <div style="text-align:center;padding:20px;color:#555;border-top:1px solid #222;margin-top:20px;">
+            <p style="letter-spacing:1px;font-size:0.85em;">MRAF-Net © 2026 &nbsp;|&nbsp; Anne Nidhusha Nithiyalan &nbsp;|&nbsp; University of Westminster / IIT</p>
         </div>
         """)
         

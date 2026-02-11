@@ -419,10 +419,11 @@ def create_3d_plot():
     step = 3
     seg_down = seg[::step, ::step, ::step]
     
-    fig = plt.figure(figsize=(10, 8))
+    fig = plt.figure(figsize=(10, 8), facecolor='#0a0a0a')
     ax = fig.add_subplot(111, projection='3d')
+    ax.set_facecolor('#0a0a0a')
     
-    colors = {1: 'green', 2: 'yellow', 4: 'red'}
+    colors = {1: '#ffffff', 2: '#aaaaaa', 4: '#555555'}
     labels = {1: 'NCR/NET', 2: 'Edema', 4: 'Enhancing'}
     
     for label, color in colors.items():
@@ -433,13 +434,14 @@ def create_3d_plot():
                 indices = np.random.choice(len(coords), 2000, replace=False)
                 coords = coords[indices]
             ax.scatter(coords[:, 0], coords[:, 1], coords[:, 2],
-                      c=color, alpha=0.3, s=1, label=labels[label])
+                      c=color, alpha=0.4, s=1, label=labels[label])
     
-    ax.set_xlabel('X')
-    ax.set_ylabel('Y')
-    ax.set_zlabel('Z')
-    ax.legend()
-    ax.set_title('3D Tumor Visualization')
+    ax.set_xlabel('X', color='#aaaaaa')
+    ax.set_ylabel('Y', color='#aaaaaa')
+    ax.set_zlabel('Z', color='#aaaaaa')
+    ax.tick_params(colors='#666666')
+    ax.legend(facecolor='#1a1a1a', edgecolor='#333333', labelcolor='#cccccc')
+    ax.set_title('3D Tumor Visualization', color='#ffffff')
     
     plt.tight_layout()
     return fig
@@ -475,40 +477,132 @@ stored_data = None
 def create_interface():
     """Create the Gradio interface."""
     
-    # Custom CSS
+    # Custom CSS — Black & White MRI Theme
     css = """
+    /* ── Global Dark Background ── */
     .gradio-container {
-        max-width: 1400px !important;
+        max-width: 100% !important;
+        width: 100% !important;
+        margin: 0 auto !important;
+        padding: 0 40px !important;
+        background: #0a0a0a !important;
+        color: #e0e0e0 !important;
+        box-sizing: border-box !important;
     }
+    body, .dark {
+        background: #0a0a0a !important;
+    }
+    /* ── Header ── */
     .header-text {
         text-align: center;
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        padding: 20px;
-        border-radius: 10px;
-        color: white;
+        background: radial-gradient(ellipse at center, #1a1a1a 0%, #000000 70%);
+        padding: 30px 20px;
+        border-radius: 4px;
+        color: #ffffff;
         margin-bottom: 20px;
+        border: 1px solid #333333;
+        box-shadow: 0 0 40px rgba(255,255,255,0.03);
     }
+    .header-text h1 {
+        font-weight: 300;
+        letter-spacing: 6px;
+        text-transform: uppercase;
+        color: #ffffff;
+    }
+    .header-text h3 {
+        font-weight: 300;
+        letter-spacing: 2px;
+        color: #aaaaaa;
+    }
+    .header-text p {
+        color: #888888;
+        font-size: 0.9em;
+    }
+    /* ── Metric Box ── */
     .metric-box {
-        background: #f8fafc;
+        background: #111111;
         padding: 15px;
-        border-radius: 8px;
-        border-left: 4px solid #667eea;
+        border-radius: 4px;
+        border-left: 4px solid #ffffff;
+        color: #e0e0e0;
     }
+    /* ── Legend ── */
     .legend-box {
-        background: #f1f5f9;
-        padding: 10px;
-        border-radius: 8px;
+        background: #111111;
+        padding: 12px 16px;
+        border-radius: 4px;
+        border: 1px solid #333333;
+        color: #cccccc;
     }
+    /* ── Gradio Component Overrides ── */
+    .gr-box, .gr-panel, .gr-form, .gr-input, .gr-padded {
+        background: #111111 !important;
+        border-color: #333333 !important;
+        color: #e0e0e0 !important;
+    }
+    .gr-button-primary {
+        background: #ffffff !important;
+        color: #000000 !important;
+        border: none !important;
+        font-weight: 600;
+    }
+    .gr-button-primary:hover {
+        background: #cccccc !important;
+    }
+    .gr-button-secondary {
+        background: #1a1a1a !important;
+        color: #e0e0e0 !important;
+        border: 1px solid #444444 !important;
+    }
+    label, .gr-check-radio, .label-wrap {
+        color: #cccccc !important;
+    }
+    input, textarea, select {
+        background: #1a1a1a !important;
+        color: #e0e0e0 !important;
+        border-color: #333333 !important;
+    }
+    .tabs .tab-nav button {
+        color: #888888 !important;
+        background: transparent !important;
+    }
+    .tabs .tab-nav button.selected {
+        color: #ffffff !important;
+        border-bottom: 2px solid #ffffff !important;
+    }
+    .prose h1, .prose h2, .prose h3, .prose h4, .prose p, .prose li, .prose td, .prose th {
+        color: #e0e0e0 !important;
+    }
+    .prose table {
+        border-color: #333333 !important;
+    }
+    .prose th, .prose td {
+        border-color: #333333 !important;
+    }
+    .prose code {
+        background: #1a1a1a !important;
+        color: #cccccc !important;
+    }
+    .prose pre {
+        background: #0d0d0d !important;
+    }
+    footer { display: none !important; }
     """
     
-    with gr.Blocks(css=css, title="MRAF-Net Brain Tumor Segmentation") as demo:
+    with gr.Blocks(css=css, title="MRAF-Net Brain Tumor Segmentation", theme=gr.themes.Base(
+        primary_hue=gr.themes.Color(c50="#f5f5f5",c100="#e0e0e0",c200="#cccccc",c300="#aaaaaa",c400="#888888",c500="#666666",c600="#444444",c700="#333333",c800="#1a1a1a",c900="#0a0a0a",c950="#000000"),
+        secondary_hue=gr.themes.Color(c50="#f5f5f5",c100="#e0e0e0",c200="#cccccc",c300="#aaaaaa",c400="#888888",c500="#666666",c600="#444444",c700="#333333",c800="#1a1a1a",c900="#0a0a0a",c950="#000000"),
+        neutral_hue=gr.themes.Color(c50="#f5f5f5",c100="#e0e0e0",c200="#cccccc",c300="#aaaaaa",c400="#888888",c500="#666666",c600="#444444",c700="#333333",c800="#1a1a1a",c900="#0a0a0a",c950="#000000"),
+    )) as demo:
         # Header
         gr.HTML("""
         <div class="header-text">
-            <h1>MRAF-Net</h1>
-            <h3>Multi-Resolution Aligned and Robust Fusion Network for Brain Tumor Segmentation</h3>
-            <p>BEng Software Engineering | University of Westminster | IIT</p>
-            <p>Anne Nidhusha Nithiyalan (w1985740) | Supervisor: Ms. Mohanadas Jananie</p>
+            <h1 style="margin:0 0 8px 0;">⬡ MRAF-Net</h1>
+            <h3 style="margin:4px 0;">Multi-Resolution Aligned and Robust Fusion Network</h3>
+            <p style="margin:4px 0;">Brain Tumor Segmentation from Multi-Modal MRI</p>
+            <hr style="border:none;border-top:1px solid #333;margin:12px auto;width:60%;">
+            <p>Anne Nidhusha Nithiyalan (w1985740) &nbsp;|&nbsp; Supervisor: Ms. Mohanadas Jananie</p>
+            <p>BEng Software Engineering &nbsp;|&nbsp; University of Westminster / IIT</p>
         </div>
         """)
         
@@ -556,10 +650,10 @@ def create_interface():
                         # Legend
                         gr.HTML("""
                         <div class="legend-box">
-                            <b>Legend:</b>
-                            <span style="color: green;">■ NCR/NET (Necrotic Core)</span> |
-                            <span style="color: #DAA520;">■ Edema (Peritumoral)</span> |
-                            <span style="color: red;">■ ET (Enhancing Tumor)</span>
+                            <b style="color:#ffffff;">Legend:</b>&nbsp;&nbsp;
+                            <span style="color:#ffffff;border:1px solid #ffffff;padding:2px 8px;border-radius:2px;margin:0 4px;font-size:0.85em;">■ NCR/NET</span>
+                            <span style="color:#aaaaaa;border:1px solid #aaaaaa;padding:2px 8px;border-radius:2px;margin:0 4px;font-size:0.85em;">■ Edema</span>
+                            <span style="color:#666666;border:1px solid #666666;padding:2px 8px;border-radius:2px;margin:0 4px;font-size:0.85em;">■ Enhancing</span>
                         </div>
                         """)
                 
@@ -634,9 +728,9 @@ def create_interface():
         
         # Footer
         gr.HTML("""
-        <div style="text-align: center; padding: 20px; color: #666; border-top: 1px solid #eee; margin-top: 20px;">
-            <p>MRAF-Net Brain Tumor Segmentation System | © 2026 Anne Nidhusha Nithiyalan</p>
-            <p>University of Westminster | Informatics Institute of Technology</p>
+        <div style="text-align:center;padding:20px;color:#555;border-top:1px solid #222;margin-top:20px;">
+            <p style="letter-spacing:1px;font-size:0.85em;">MRAF-Net Brain Tumor Segmentation System &nbsp;|&nbsp; © 2026 Anne Nidhusha Nithiyalan</p>
+            <p style="font-size:0.8em;color:#444;">University of Westminster &nbsp;|&nbsp; Informatics Institute of Technology</p>
         </div>
         """)
         

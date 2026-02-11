@@ -34,13 +34,70 @@ class ChannelAttention(nn.Module):
         return x * attention
 
 
-class ModalityAttention(nn.Module):
-    """Attention for modality groups (memory efficient)."""
+class CoordinateAttention3D(nn.Module):
+    """
+    3D Coordinate Attention (Novel).
+    
+    Encodes long-range spatial dependencies along each of the three spatial
+    axes (D, H, W) into channel attention maps. This provides richer
+    positional information than standard channel attention (SE blocks),
+    enabling more precise cross-modality alignment.
+    
+    Reference: Hou et al., "Coordinate Attention for Efficient Mobile Network Design", CVPR 2021.
+    Extended here to 3D for volumetric medical image segmentation.
+    """
     
     def __init__(self, channels: int, reduction: int = 8):
         super().__init__()
         
-        self.channel_attn = ChannelAttention(channels, reduction)
+        mid_channels = max(channels // reduction, 8)
+        
+        # Shared transform
+        self.shared_conv = nn.Sequential(
+            nn.Conv1d(channels, mid_channels, kernel_size=1, bias=False),
+            nn.BatchNorm1d(mid_channels),
+            nn.ReLU(inplace=True)
+        )
+        
+        # Per-axis attention heads
+        self.conv_d = nn.Conv1d(mid_channels, channels, kernel_size=1, bias=True)
+        self.conv_h = nn.Conv1d(mid_channels, channels, kernel_size=1, bias=True)
+        self.conv_w = nn.Conv1d(mid_channels, channels, kernel_size=1, bias=True)
+        
+        self.sigmoid = nn.Sigmoid()
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """x: (B, C, D, H, W)"""
+        B, C, D, H, W = x.shape
+        
+        # Pool along each axis to get 1D descriptors
+        # Average over (H, W) -> (B, C, D)
+        pool_d = x.mean(dim=[3, 4])  # (B, C, D)
+        # Average over (D, W) -> (B, C, H)
+        pool_h = x.mean(dim=[2, 4])  # (B, C, H)
+        # Average over (D, H) -> (B, C, W)
+        pool_w = x.mean(dim=[2, 3])  # (B, C, W)
+        
+        # Shared transform
+        y_d = self.shared_conv(pool_d)  # (B, mid, D)
+        y_h = self.shared_conv(pool_h)  # (B, mid, H)
+        y_w = self.shared_conv(pool_w)  # (B, mid, W)
+        
+        # Per-axis attention
+        a_d = self.sigmoid(self.conv_d(y_d)).unsqueeze(3).unsqueeze(4)  # (B, C, D, 1, 1)
+        a_h = self.sigmoid(self.conv_h(y_h)).unsqueeze(2).unsqueeze(4)  # (B, C, 1, H, 1)
+        a_w = self.sigmoid(self.conv_w(y_w)).unsqueeze(2).unsqueeze(3)  # (B, C, 1, 1, W)
+        
+        return x * a_d * a_h * a_w
+
+
+class ModalityAttention(nn.Module):
+    """Attention for modality groups using Coordinate Attention (memory efficient)."""
+    
+    def __init__(self, channels: int, reduction: int = 8):
+        super().__init__()
+        
+        self.coord_attn = CoordinateAttention3D(channels, reduction)
         self.spatial_conv = nn.Sequential(
             nn.Conv3d(channels, channels // 4, kernel_size=1, bias=False),
             nn.InstanceNorm3d(channels // 4, affine=True),
@@ -50,7 +107,7 @@ class ModalityAttention(nn.Module):
         )
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.channel_attn(x)
+        x = self.coord_attn(x)
         spatial_attn = self.spatial_conv(x)
         return x * spatial_attn
 

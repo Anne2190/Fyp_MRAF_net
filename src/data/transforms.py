@@ -227,6 +227,121 @@ class RandomElasticDeformation:
         return sample
 
 
+class MixUp3D:
+    """
+    MixUp augmentation for 3D volumes (Novel for brain tumor segmentation).
+    
+    Linearly interpolates pairs of images and their labels within a batch.
+    This encourages the network to learn smoother decision boundaries and
+    acts as a strong regularizer against overfitting.
+    
+    Note: This operates on batches, so it must be applied AFTER
+    the DataLoader collation, not as a standard per-sample transform.
+    
+    Args:
+        alpha: Beta distribution parameter for sampling mix ratio.
+        prob: Probability of applying MixUp.
+    """
+    
+    def __init__(self, alpha: float = 0.2, prob: float = 0.5):
+        self.alpha = alpha
+        self.prob = prob
+    
+    def __call__(self, images: np.ndarray, labels: np.ndarray):
+        """
+        Args:
+            images: (B, C, D, H, W) batch of images
+            labels: (B, D, H, W) batch of labels
+        
+        Returns:
+            mixed_images, labels_a, labels_b, lam
+        """
+        if random.random() > self.prob:
+            return images, labels, labels, 1.0
+        
+        lam = np.random.beta(self.alpha, self.alpha)
+        batch_size = images.shape[0]
+        
+        if batch_size < 2:
+            return images, labels, labels, 1.0
+        
+        indices = np.random.permutation(batch_size)
+        mixed_images = lam * images + (1 - lam) * images[indices]
+        
+        return mixed_images, labels, labels[indices], lam
+
+
+class CutMix3D:
+    """
+    CutMix augmentation for 3D volumes (Novel for brain tumor segmentation).
+    
+    Cuts a random 3D cuboid from one sample and pastes it onto another.
+    The label is mixed proportionally to the volume of the cut region.
+    This forces the network to be robust to partial occlusions.
+    
+    Note: This operates on batches (like MixUp).
+    
+    Args:
+        alpha: Beta distribution parameter for sampling cut ratio.
+        prob: Probability of applying CutMix.
+    """
+    
+    def __init__(self, alpha: float = 1.0, prob: float = 0.5):
+        self.alpha = alpha
+        self.prob = prob
+    
+    @staticmethod
+    def _rand_bbox_3d(D: int, H: int, W: int, lam: float):
+        """Generate random 3D bounding box."""
+        cut_ratio = np.cbrt(1.0 - lam)  # cube root for 3D
+        cut_d = int(D * cut_ratio)
+        cut_h = int(H * cut_ratio)
+        cut_w = int(W * cut_ratio)
+        
+        cd = np.random.randint(D)
+        ch = np.random.randint(H)
+        cw = np.random.randint(W)
+        
+        d1 = np.clip(cd - cut_d // 2, 0, D)
+        d2 = np.clip(cd + cut_d // 2, 0, D)
+        h1 = np.clip(ch - cut_h // 2, 0, H)
+        h2 = np.clip(ch + cut_h // 2, 0, H)
+        w1 = np.clip(cw - cut_w // 2, 0, W)
+        w2 = np.clip(cw + cut_w // 2, 0, W)
+        
+        return d1, d2, h1, h2, w1, w2
+    
+    def __call__(self, images: np.ndarray, labels: np.ndarray):
+        """
+        Args:
+            images: (B, C, D, H, W)
+            labels: (B, D, H, W)
+        
+        Returns:
+            mixed_images, mixed_labels (hard label paste for segmentation)
+        """
+        if random.random() > self.prob:
+            return images, labels
+        
+        batch_size = images.shape[0]
+        if batch_size < 2:
+            return images, labels
+        
+        lam = np.random.beta(self.alpha, self.alpha)
+        indices = np.random.permutation(batch_size)
+        
+        _, _, D, H, W = images.shape
+        d1, d2, h1, h2, w1, w2 = self._rand_bbox_3d(D, H, W, lam)
+        
+        mixed_images = images.copy()
+        mixed_labels = labels.copy()
+        
+        mixed_images[:, :, d1:d2, h1:h2, w1:w2] = images[indices, :, d1:d2, h1:h2, w1:w2]
+        mixed_labels[:, d1:d2, h1:h2, w1:w2] = labels[indices, d1:d2, h1:h2, w1:w2]
+        
+        return mixed_images, mixed_labels
+
+
 class CropForeground:
     """Crop to foreground region (brain mask)."""
     
