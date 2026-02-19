@@ -25,16 +25,16 @@ MRAF-Net is a deep learning architecture for automatic brain tumor segmentation 
 - **Storage**: 1 TB SSD
 - **OS**: Windows 10
 
-## Quick Start Guide
+## Installation & Setup
 
-### Step 1: Clone/Create Project Directory
+### 1. Clone/Create Project Directory
 ```bash
 # Create project folder
 mkdir mraf_net
 cd mraf_net
 ```
 
-### Step 2: Create Virtual Environment
+### 2. Create Virtual Environment
 
 #### Windows (Command Prompt as Administrator):
 ```cmd
@@ -54,39 +54,87 @@ python3 -m venv venv
 source venv/bin/activate
 ```
 
-### Step 3: Install Dependencies
+### 3. Install Dependencies
 ```bash
 pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-### Step 4: Verify CUDA Installation
-```python
+### 4. Verify CUDA Installation (optional)
+```bash
 python -c "import torch; print(f'PyTorch: {torch.__version__}'); print(f'CUDA Available: {torch.cuda.is_available()}'); print(f'GPU: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"None\"}')"
 ```
 
-### Step 5: Download BraTS 2020 Dataset
+### 5. Download and Prepare the Dataset
 1. Register at: https://www.med.upenn.edu/cbica/brats2020/registration.html
-2. Download the Training Data
-3. Extract to: `data/brats2020/MICCAI_BraTS2020_TrainingData/`
+2. Download the Training Data and extract it to:
+   `data/brats2020/MICCAI_BraTS2020_TrainingData/`
 
-### Step 6: Prepare Data
+3. Run the preparation script:
 ```bash
-python scripts/prepare_data.py --data_dir data/brats2020/MICCAI_BraTS2020_TrainingData
+python scripts/prepare_data.py \
+    --data_dir data/brats2020/MICCAI_BraTS2020_TrainingData
 ```
 
-### Step 7: Start Training
+---
+
+## Running the Application
+
+The repository provides several command‑line entry points. All scripts live under `scripts/` and accept `--help` for a full list of options.
+
+### 1. Training the Model
 ```bash
-# For laptop with limited GPU (6-8GB VRAM)
+# standard mode (uses settings from config/config.yaml)
+python scripts/train.py --config config/config.yaml
+
+# laptop mode (smaller batch/patches, mixed‑precision etc.)
 python scripts/train.py --config config/config.yaml --mode laptop
-
-# For better GPU (12GB+ VRAM)
-python scripts/train.py --config config/config.yaml --mode standard
 ```
 
-### Step 8: Evaluate Model
+**Notes:**
+- `--mode` is optional; default is `standard`.
+- Training results (checkpoints, logs) are saved to a new folder under `experiments/`.
+- You can resume from a checkpoint by editing `config/config.yaml` or using the `checkpoint.resume` field.
+
+### 2. Evaluating a Checkpoint
 ```bash
-python scripts/evaluate.py --checkpoint checkpoints/best_model.pth
+python scripts/evaluate.py \
+    --checkpoint experiments/<exp_name>/checkpoints/best_model.pth
+```
+
+Add `--data_dir <path>` or `--output <path>` to override defaults. Use `python scripts/evaluate.py --help` for details.
+
+### 3. Running Inference / Prediction
+```bash
+python scripts/predict.py \
+    --checkpoint experiments/<exp_name>/checkpoints/best_model.pth \
+    --input path/to/case_directory \
+    --output predictions/
+```
+
+- The `--input` directory should contain the four modalities (FLAIR, T1, T1ce, T2) named either `<case>_flair.nii.gz` (or `.nii`) or simply `flair.nii.gz`, etc.
+- Predictions are saved as NIfTI files in the `--output` folder.
+
+### 4. Starting the GUI (optional)
+A simple PyQt5 interface is provided in the `gui/` folder. After installing the packages listed in `gui/requirements.txt`:
+```bash
+cd gui
+python app.py          # launch development GUI
+# or
+python standalone_gui.py   # run the bundled single‑file version
+```
+
+The GUI allows you to select a checkpoint and case directory from a file dialog and displays the segmentation overlay.
+
+### 5. Other Utilities
+- `scripts/prepare_data.py` – preprocess the dataset
+- `scripts/test_all.py` – run the unit/integration tests
+
+Each script supports `--help` for command‑line arguments.
+
+---
+
+## Project Structure
 ```
 
 ## Project Structure
