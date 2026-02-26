@@ -92,12 +92,12 @@ class CoordinateAttention3D(nn.Module):
 
 
 class ModalityAttention(nn.Module):
-    """Attention for modality groups using Coordinate Attention (memory efficient)."""
-    
+    """Attention for modality groups (channel + spatial, matches trained checkpoints)."""
+
     def __init__(self, channels: int, reduction: int = 8):
         super().__init__()
-        
-        self.coord_attn = CoordinateAttention3D(channels, reduction)
+
+        self.channel_attn = ChannelAttention(channels, reduction)
         self.spatial_conv = nn.Sequential(
             nn.Conv3d(channels, channels // 4, kernel_size=1, bias=False),
             nn.InstanceNorm3d(channels // 4, affine=True),
@@ -105,9 +105,9 @@ class ModalityAttention(nn.Module):
             nn.Conv3d(channels // 4, channels, kernel_size=1, bias=False),
             nn.Sigmoid()
         )
-    
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.coord_attn(x)
+        x = self.channel_attn(x)
         spatial_attn = self.spatial_conv(x)
         return x * spatial_attn
 

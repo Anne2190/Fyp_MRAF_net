@@ -121,10 +121,16 @@ class MRAFNet(nn.Module):
     def enable_gradient_checkpointing(self):
         """Enable gradient checkpointing for memory efficiency."""
         self.use_checkpointing = True
-    
+
     def disable_gradient_checkpointing(self):
         """Disable gradient checkpointing."""
         self.use_checkpointing = False
+
+    def get_parameter_count(self) -> Dict[str, int]:
+        """Return total and trainable parameter counts."""
+        total = sum(p.numel() for p in self.parameters())
+        trainable = sum(p.numel() for p in self.parameters() if p.requires_grad)
+        return {"total": total, "trainable": trainable}
     
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, Optional[List[torch.Tensor]]]:
         """
@@ -218,7 +224,8 @@ def create_model(config: Dict) -> MRAFNet:
         num_classes=data_config.get('num_classes', 4),
         base_features=model_config.get('base_features', 32),
         deep_supervision=model_config.get('deep_supervision', True),
-        dropout=model_config.get('dropout', 0.0)
+        dropout=model_config.get('dropout', 0.0),
+        use_swin_bottleneck=model_config.get('use_swin_bottleneck', False),
     )
     
     return model
