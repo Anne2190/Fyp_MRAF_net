@@ -18,6 +18,7 @@ Then open: http://localhost:7860
 import os
 import sys
 import time
+import html
 import tempfile
 import textwrap
 from pathlib import Path
@@ -517,48 +518,194 @@ def compute_advanced_metrics(
     return metrics
 
 
+def render_results_message(title: str, message: str, tone: str = "neutral") -> str:
+    """Render a styled empty, warning, or error state for the results panel."""
+    safe_title = html.escape(title)
+    safe_message = html.escape(message).replace("\n", "<br>")
+    return f"""
+    <div class="results-shell">
+        <div class="results-status results-status--{tone}">
+            <div class="results-status__eyebrow">{safe_title}</div>
+            <div class="results-status__body">{safe_message}</div>
+        </div>
+    </div>
+    """
+
+
+def _format_metric_value(value, unit: str = "", decimals: int = 2) -> str:
+    """Format numeric values safely for the HTML dashboard."""
+    if isinstance(value, (int, float, np.integer, np.floating)):
+        return f"{float(value):.{decimals}f}{unit}"
+    return html.escape(str(value))
+
+
+def _format_metric_pct(value) -> str:
+    """Format a 0-1 metric as a human-readable percentage."""
+    if isinstance(value, (int, float, np.integer, np.floating)):
+        return f"{float(value) * 100:.2f}%"
+    return html.escape(str(value))
+
+
+def _render_kpi_card(label: str, code: str, value: str, accent: str, meta: str) -> str:
+    """Render a compact KPI card."""
+    return f"""
+    <div class="results-card results-card--kpi" style="--accent:{accent};">
+        <div class="results-card__code">{html.escape(code)}</div>
+        <div class="results-card__value">{html.escape(value)}</div>
+        <div class="results-card__label">{html.escape(label)}</div>
+        <div class="results-card__meta">{html.escape(meta)}</div>
+    </div>
+    """
+
+
+def _render_composition_row(label: str, description: str, percentage: float, accent: str) -> str:
+    """Render a composition bar row."""
+    width = max(0.0, min(100.0, float(percentage)))
+    return f"""
+    <div class="composition-row">
+        <div class="composition-row__meta">
+            <span class="composition-row__dot" style="--accent:{accent};"></span>
+            <div>
+                <div class="composition-row__label">{html.escape(label)}</div>
+                <div class="composition-row__description">{html.escape(description)}</div>
+            </div>
+        </div>
+        <div class="composition-row__track">
+            <div class="composition-row__fill" style="--accent:{accent}; width:{width:.2f}%;"></div>
+        </div>
+        <div class="composition-row__value">{width:.2f}%</div>
+    </div>
+    """
+
+
+def _render_eval_card(label: str, dice, sensitivity, specificity, hd95, accent: str) -> str:
+    """Render evaluation metrics for one tumor region."""
+    return f"""
+    <div class="results-card results-card--eval" style="--accent:{accent};">
+        <div class="results-card__header">
+            <div class="results-card__label">{html.escape(label)}</div>
+            <div class="results-pill">{_format_metric_pct(dice)}</div>
+        </div>
+        <div class="results-stat-grid">
+            <div class="results-stat">
+                <span class="results-stat__label">Sensitivity</span>
+                <span class="results-stat__value">{_format_metric_pct(sensitivity)}</span>
+            </div>
+            <div class="results-stat">
+                <span class="results-stat__label">Specificity</span>
+                <span class="results-stat__value">{_format_metric_pct(specificity)}</span>
+            </div>
+            <div class="results-stat">
+                <span class="results-stat__label">HD95</span>
+                <span class="results-stat__value">{_format_metric_value(hd95, ' mm')}</span>
+            </div>
+        </div>
+    </div>
+    """
+
+
 def format_metrics_text(metrics: Dict) -> str:
-    """Format metrics dict into Markdown for display."""
-    text = "## Results\n\n"
+    """Format metrics into a card-based HTML dashboard."""
+    volume_cards = "".join([
+        _render_kpi_card("Whole Tumor", "WT", _format_metric_value(metrics["volume"]["wt"], " ml"), "#f2f2f2", "Combined tumor burden"),
+        _render_kpi_card("Tumor Core", "TC", _format_metric_value(metrics["volume"]["tc"], " ml"), "#7cc6ff", "Core sub-region"),
+        _render_kpi_card("Enhancing", "ET", _format_metric_value(metrics["volume"]["et"], " ml"), "#ff5a5a", "Active enhancing tissue"),
+    ])
 
-    # Volumes
-    text += "### Volumes (ml)\n"
-    text += f"| Region | Volume |\n|--------|--------|\n"
-    text += f"| Whole Tumor (WT) | {metrics['volume']['wt']:.2f} |\n"
-    text += f"| Tumor Core (TC) | {metrics['volume']['tc']:.2f} |\n"
-    text += f"| Enhancing (ET) | {metrics['volume']['et']:.2f} |\n\n"
+    composition_rows = "".join([
+        _render_composition_row("NCR/NET", "Green overlay • necrotic core / non-enhancing tumor", metrics["composition_pct"]["ncr_net"], "#33d17a"),
+        _render_composition_row("Edema", "Yellow overlay • swelling around tumor", metrics["composition_pct"]["edema"], "#ffd54a"),
+        _render_composition_row("Enhancing", "Red overlay • actively enhancing tumor", metrics["composition_pct"]["enhancing"], "#ff5a5a"),
+    ])
 
-    text += "### Predicted Tumor Composition\n"
-    text += "| Color | Region | Share of Predicted Tumor |\n|-------|--------|--------------------------|\n"
-    text += f"| Green | NCR/NET | {metrics['composition_pct']['ncr_net']:.2f}% |\n"
-    text += f"| Yellow | Edema | {metrics['composition_pct']['edema']:.2f}% |\n"
-    text += f"| Red | Enhancing | {metrics['composition_pct']['enhancing']:.2f}% |\n\n"
-    text += "Percentages above describe how the predicted tumor is split across regions. They are not confidence scores.\n\n"
+    performance_cards = [
+        _render_kpi_card("Inference Time", "SPEED", _format_metric_value(metrics["inference_time"], " s", decimals=3), "#a8c5ff", "End-to-end model runtime"),
+    ]
+    if metrics["peak_gpu_mb"] > 0:
+        performance_cards.append(
+            _render_kpi_card("Peak GPU Memory", "CUDA", _format_metric_value(metrics["peak_gpu_mb"], " MB", decimals=1), "#ffb15a", "Maximum allocated GPU memory")
+        )
 
-    # Performance
-    text += "### Performance\n"
-    text += f"- **Inference Time:** {metrics['inference_time']:.3f} s\n"
-    if metrics['peak_gpu_mb'] > 0:
-        text += f"- **Peak GPU Memory:** {metrics['peak_gpu_mb']:.1f} MB\n"
-    text += "\n"
+    hero_pills = [
+        f"<div class=\"results-pill\">Inference {_format_metric_value(metrics['inference_time'], ' s', decimals=3)}</div>",
+        f"<div class=\"results-pill\">Tumor {_format_metric_value(metrics['volume']['wt'], ' ml')}</div>",
+    ]
+    evaluation_html = """
+    <div class="results-empty-card">
+        Upload a ground-truth mask to unlock Dice, Sensitivity, Specificity, and HD95 evaluation cards.
+    </div>
+    """
 
     if "dice" in metrics:
-        # Dice
-        text += "### Dice Scores\n"
-        text += "| Region | Dice (%) | Sensitivity (%) | Specificity (%) | HD95 (mm) |\n"
-        text += "|--------|----------|-----------------|-----------------|----------|\n"
-        for key, label in [("wt", "Whole Tumor"), ("tc", "Tumor Core"), ("et", "Enhancing")]:
-            dice = metrics["dice"][key]
-            sens = metrics["sensitivity"][key]
-            spec = metrics["specificity"][key]
-            hd95 = metrics["hd95"][key]
-            text += f"| {label} | {dice * 100:.2f}% | {sens * 100:.2f}% | {spec * 100:.2f}% | {hd95} |\n"
-        text += f"\n**Mean Dice: {metrics['dice']['mean'] * 100:.2f}%**\n"
-        text += "\nThese percentages compare the prediction against the uploaded ground truth. They are accuracy metrics, not confidence.\n"
-    else:
-        text += "Upload a ground-truth mask to see Dice, Sensitivity, and Specificity percentages.\n"
+        hero_pills.append(f"<div class=\"results-pill results-pill--accent\">Mean Dice {_format_metric_pct(metrics['dice']['mean'])}</div>")
+        evaluation_html = f"""
+        <div class="results-grid results-grid--eval">
+            {_render_eval_card('Whole Tumor', metrics['dice']['wt'], metrics['sensitivity']['wt'], metrics['specificity']['wt'], metrics['hd95']['wt'], '#f2f2f2')}
+            {_render_eval_card('Tumor Core', metrics['dice']['tc'], metrics['sensitivity']['tc'], metrics['specificity']['tc'], metrics['hd95']['tc'], '#7cc6ff')}
+            {_render_eval_card('Enhancing Tumor', metrics['dice']['et'], metrics['sensitivity']['et'], metrics['specificity']['et'], metrics['hd95']['et'], '#ff5a5a')}
+        </div>
+        <div class="results-note">
+            These percentages compare the prediction against the uploaded ground truth. They are evaluation metrics, not confidence scores.
+        </div>
+        """
 
-    return text
+    return f"""
+    <div class="results-shell">
+        <div class="results-hero">
+            <div>
+                <div class="results-status__eyebrow">Segmentation Results</div>
+                <h2 class="results-hero__title">Card-based tumor summary</h2>
+                <p class="results-hero__subtitle">
+                    Predicted tumor burden, regional composition, and runtime are grouped into scan-friendly cards for faster review.
+                </p>
+            </div>
+            <div class="results-pill-row">
+                {''.join(hero_pills)}
+            </div>
+        </div>
+
+        <div class="results-section">
+            <div class="results-section__head">
+                <h3>Tumor Volumes</h3>
+                <p>Predicted volume for each clinically relevant region.</p>
+            </div>
+            <div class="results-grid results-grid--volumes">
+                {volume_cards}
+            </div>
+        </div>
+
+        <div class="results-section">
+            <div class="results-section__head">
+                <h3>Predicted Tumor Composition</h3>
+                <p>How the predicted tumor is split across the overlay colors.</p>
+            </div>
+            <div class="results-card results-card--composition">
+                {composition_rows}
+            </div>
+            <div class="results-note">
+                Percentages above describe region share within the predicted tumor. They are not model confidence scores.
+            </div>
+        </div>
+
+        <div class="results-section">
+            <div class="results-section__head">
+                <h3>Performance</h3>
+                <p>Runtime and hardware footprint for this prediction.</p>
+            </div>
+            <div class="results-grid results-grid--performance">
+                {''.join(performance_cards)}
+            </div>
+        </div>
+
+        <div class="results-section">
+            <div class="results-section__head">
+                <h3>Evaluation</h3>
+                <p>Ground-truth comparison appears here when a mask is uploaded.</p>
+            </div>
+            {evaluation_html}
+        </div>
+    </div>
+    """
 
 
 # ============================================================================
@@ -580,10 +727,18 @@ def run_segmentation(checkpoint_path, flair, t1, t1ce, t2, gt=None):
     global stored_data
 
     if not all([flair, t1, t1ce, t2]):
-        return None, build_slice_slider_update(MAX_SLICE_INDEX + 1, 50), "⚠ Upload all 4 modalities"
+        return None, build_slice_slider_update(MAX_SLICE_INDEX + 1, 50), render_results_message(
+            "Missing MRI Inputs",
+            "Please upload all 4 MRI modalities before running segmentation.",
+            tone="warning",
+        )
 
     if not model.loaded:
-        return None, build_slice_slider_update(MAX_SLICE_INDEX + 1, 50), "✗ Load model first"
+        return None, build_slice_slider_update(MAX_SLICE_INDEX + 1, 50), render_results_message(
+            "Model Not Loaded",
+            "Load a checkpoint first so the app can run segmentation.",
+            tone="danger",
+        )
 
     try:
         flair_data = nib.load(flair.name).get_fdata().astype(np.float32)
@@ -598,7 +753,11 @@ def run_segmentation(checkpoint_path, flair, t1, t1ce, t2, gt=None):
 
         shape_error = validate_modality_shapes(flair_data, t1_data, t1ce_data, t2_data, ground_truth)
         if shape_error is not None:
-            return None, build_slice_slider_update(MAX_SLICE_INDEX + 1, 50), shape_error
+            return None, build_slice_slider_update(MAX_SLICE_INDEX + 1, 50), render_results_message(
+                "Shape Validation Failed",
+                shape_error,
+                tone="danger",
+            )
 
         images = np.stack([flair_data, t1_data, t1ce_data, t2_data], axis=0)
         images_norm = normalize_intensity(images)
@@ -636,8 +795,11 @@ def run_segmentation(checkpoint_path, flair, t1, t1ce, t2, gt=None):
         return viz, build_slice_slider_update(flair_data.shape[2], mid), text
 
     except Exception as e:
-        import traceback
-        return None, build_slice_slider_update(MAX_SLICE_INDEX + 1, 50), f"✗ Error: {e}\n{traceback.format_exc()}"
+        return None, build_slice_slider_update(MAX_SLICE_INDEX + 1, 50), render_results_message(
+            "Segmentation Failed",
+            f"{str(e)}\n\nSee the application logs for the full traceback.",
+            tone="danger",
+        )
 
 
 def update_view(slice_idx, view, overlay, alpha):
@@ -766,6 +928,254 @@ def create_app():
     .prose table, .prose th, .prose td { border-color: #333 !important; }
     .prose code { background:#1a1a1a !important; color:#ccc !important; }
     .prose pre  { background:#0d0d0d !important; }
+    .results-shell {
+        display: flex;
+        flex-direction: column;
+        gap: 18px;
+        margin: 8px 0 4px;
+    }
+    .results-hero, .results-status {
+        background: linear-gradient(145deg, rgba(26,26,26,0.98), rgba(10,10,10,0.98));
+        border: 1px solid #2d2d2d;
+        border-radius: 18px;
+        padding: 20px 22px;
+        box-shadow: 0 18px 40px rgba(0,0,0,0.28);
+    }
+    .results-hero {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        gap: 16px;
+        align-items: flex-start;
+    }
+    .results-hero__title {
+        margin: 6px 0 8px;
+        font-size: 1.55rem;
+        font-weight: 600;
+        color: #ffffff;
+    }
+    .results-hero__subtitle {
+        margin: 0;
+        max-width: 720px;
+        color: #9f9f9f;
+        line-height: 1.6;
+    }
+    .results-status__eyebrow {
+        text-transform: uppercase;
+        letter-spacing: 0.18em;
+        font-size: 0.74rem;
+        color: #8f8f8f;
+    }
+    .results-status__body {
+        margin-top: 12px;
+        color: #efefef;
+        line-height: 1.7;
+    }
+    .results-status--warning {
+        border-color: rgba(255, 213, 74, 0.35);
+        box-shadow: 0 18px 40px rgba(255, 213, 74, 0.08);
+    }
+    .results-status--danger {
+        border-color: rgba(255, 90, 90, 0.35);
+        box-shadow: 0 18px 40px rgba(255, 90, 90, 0.08);
+    }
+    .results-pill-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        justify-content: flex-end;
+    }
+    .results-pill {
+        display: inline-flex;
+        align-items: center;
+        min-height: 38px;
+        padding: 0 14px;
+        border-radius: 999px;
+        background: rgba(255,255,255,0.05);
+        border: 1px solid rgba(255,255,255,0.08);
+        color: #f2f2f2;
+        font-size: 0.92rem;
+        font-weight: 600;
+    }
+    .results-pill--accent {
+        background: rgba(124, 198, 255, 0.12);
+        border-color: rgba(124, 198, 255, 0.28);
+    }
+    .results-section {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+    }
+    .results-section__head h3 {
+        margin: 0;
+        color: #ffffff;
+        font-size: 1.08rem;
+    }
+    .results-section__head p {
+        margin: 5px 0 0;
+        color: #8d8d8d;
+        line-height: 1.55;
+    }
+    .results-grid {
+        display: grid;
+        gap: 14px;
+    }
+    .results-grid--volumes {
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    }
+    .results-grid--performance {
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    }
+    .results-grid--eval {
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    }
+    .results-card {
+        background: linear-gradient(180deg, rgba(18,18,18,0.98), rgba(8,8,8,0.98));
+        border: 1px solid #242424;
+        border-radius: 18px;
+        padding: 18px;
+        position: relative;
+        overflow: hidden;
+    }
+    .results-card::before {
+        content: "";
+        position: absolute;
+        inset: 0 auto auto 0;
+        width: 100%;
+        height: 3px;
+        background: var(--accent, #ffffff);
+        opacity: 0.88;
+    }
+    .results-card__code {
+        color: var(--accent, #ffffff);
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        font-size: 0.76rem;
+        margin-bottom: 14px;
+    }
+    .results-card__value {
+        color: #ffffff;
+        font-size: 1.55rem;
+        font-weight: 700;
+        margin-bottom: 6px;
+    }
+    .results-card__label {
+        color: #d9d9d9;
+        font-weight: 600;
+    }
+    .results-card__meta {
+        color: #858585;
+        font-size: 0.92rem;
+        margin-top: 8px;
+        line-height: 1.5;
+    }
+    .results-card__header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 14px;
+    }
+    .results-card--composition {
+        padding: 20px;
+    }
+    .composition-row {
+        display: grid;
+        grid-template-columns: minmax(180px, 240px) 1fr auto;
+        gap: 14px;
+        align-items: center;
+        padding: 12px 0;
+    }
+    .composition-row + .composition-row {
+        border-top: 1px solid rgba(255,255,255,0.06);
+    }
+    .composition-row__meta {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+    }
+    .composition-row__dot {
+        width: 12px;
+        height: 12px;
+        border-radius: 999px;
+        background: var(--accent, #ffffff);
+        box-shadow: 0 0 18px rgba(255,255,255,0.16);
+        flex: 0 0 auto;
+    }
+    .composition-row__label {
+        color: #f0f0f0;
+        font-weight: 600;
+    }
+    .composition-row__description {
+        color: #8c8c8c;
+        font-size: 0.9rem;
+        line-height: 1.45;
+        margin-top: 2px;
+    }
+    .composition-row__track {
+        height: 10px;
+        border-radius: 999px;
+        background: rgba(255,255,255,0.07);
+        overflow: hidden;
+    }
+    .composition-row__fill {
+        height: 100%;
+        border-radius: inherit;
+        background: var(--accent, #ffffff);
+    }
+    .composition-row__value {
+        color: #ffffff;
+        font-weight: 700;
+        min-width: 62px;
+        text-align: right;
+    }
+    .results-stat-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
+    }
+    .results-stat {
+        background: rgba(255,255,255,0.03);
+        border: 1px solid rgba(255,255,255,0.05);
+        border-radius: 14px;
+        padding: 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+    }
+    .results-stat__label {
+        color: #8e8e8e;
+        font-size: 0.8rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+    }
+    .results-stat__value {
+        color: #ffffff;
+        font-size: 1.02rem;
+        font-weight: 600;
+    }
+    .results-note, .results-empty-card {
+        background: rgba(255,255,255,0.03);
+        border: 1px dashed rgba(255,255,255,0.08);
+        border-radius: 16px;
+        padding: 14px 16px;
+        color: #a4a4a4;
+        line-height: 1.6;
+    }
+    @media (max-width: 900px) {
+        .results-pill-row {
+            justify-content: flex-start;
+        }
+        .composition-row {
+            grid-template-columns: 1fr;
+        }
+        .composition-row__value {
+            text-align: left;
+        }
+        .results-stat-grid {
+            grid-template-columns: 1fr;
+        }
+    }
     footer { display: none !important; }
     """
 
@@ -839,7 +1249,12 @@ def create_app():
                 """)
 
         # Metrics
-        metrics_display = gr.Markdown("### Run segmentation to see metrics")
+        metrics_display = gr.HTML(
+            render_results_message(
+                "Results Panel",
+                "Upload MRI scans and run segmentation to see a card-based summary here.",
+            )
+        )
 
         # Tabs
         with gr.Tabs():
