@@ -21,6 +21,7 @@ import torch
 import torch.nn.functional as F
 from torch.cuda.amp import autocast
 import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -28,6 +29,60 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.models.mraf_net import create_model
 from src.data.preprocessing import normalize_intensity, remove_small_connected_components
 from src.utils.helpers import load_config, get_device
+
+REGION_ORDER = [1, 2, 4]
+REGION_DETAILS = {
+    1: {"short": "NCR/NET", "meaning": "necrotic core", "color": (0, 255, 0)},
+    2: {"short": "ED", "meaning": "edema / swelling", "color": (255, 255, 0)},
+    4: {"short": "ET", "meaning": "enhancing tumor", "color": (255, 48, 48)},
+}
+
+
+def create_overlay_slice(mri_slice: np.ndarray, seg_slice: np.ndarray, alpha: float = 0.5) -> np.ndarray:
+    """Create MRI slice with segmentation overlay."""
+    mri_norm = (mri_slice - mri_slice.min()) / (mri_slice.max() - mri_slice.min() + 1e-8)
+    mri_rgb = np.stack([mri_norm] * 3, axis=-1)
+
+    overlay = np.zeros((*seg_slice.shape, 4), dtype=np.float32)
+    for label in REGION_ORDER:
+        mask = seg_slice == label
+        if np.any(mask):
+            r, g, b = REGION_DETAILS[label]["color"]
+            overlay[mask] = np.array([r, g, b, 180], dtype=np.float32) / 255.0
+
+    for channel in range(3):
+        mask = overlay[:, :, 3] > 0
+        mri_rgb[:, :, channel][mask] = (
+            mri_rgb[:, :, channel][mask] * (1 - alpha * overlay[:, :, 3][mask]) +
+            overlay[:, :, channel][mask] * alpha * overlay[:, :, 3][mask]
+        )
+
+    return (mri_rgb * 255).astype(np.uint8)
+
+
+def create_segmentation_rgb(seg_slice: np.ndarray) -> np.ndarray:
+    """Create a color-only segmentation view."""
+    rgb = np.zeros((*seg_slice.shape, 3), dtype=np.uint8)
+    for label in REGION_ORDER:
+        mask = seg_slice == label
+        if np.any(mask):
+            rgb[mask] = np.array(REGION_DETAILS[label]["color"], dtype=np.uint8)
+    return rgb
+
+
+def compute_region_percentages(segmentation: np.ndarray) -> dict:
+    """Return each tumor region as a share of the predicted tumor volume."""
+    unique, counts = np.unique(segmentation, return_counts=True)
+    label_counts = dict(zip(unique.astype(int), counts.astype(np.int64)))
+    tumor_total = sum(label_counts.get(label, 0) for label in REGION_ORDER)
+
+    if tumor_total == 0:
+        return {label: 0.0 for label in REGION_ORDER}
+
+    return {
+        label: (label_counts.get(label, 0) / tumor_total) * 100.0
+        for label in REGION_ORDER
+    }
 
 
 class Predictor:
@@ -344,8 +399,14 @@ class Predictor:
         """Create and save visualization."""
         # Get middle slice
         mid_slice = prediction.shape[2] // 2
+        region_percentages = compute_region_percentages(prediction)
+        overlay_rgb = create_overlay_slice(images[0, :, :, mid_slice].T, prediction[:, :, mid_slice].T, alpha=0.55)
+        prediction_rgb = create_segmentation_rgb(prediction[:, :, mid_slice].T)
         
         fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+        fig.patch.set_facecolor('#0a0a0a')
+        for ax in axes.flat:
+            ax.set_facecolor('#0a0a0a')
         
         # Show FLAIR and prediction
         axes[0, 0].imshow(images[0, :, :, mid_slice].T, cmap='gray')
@@ -365,19 +426,45 @@ class Predictor:
         axes[1, 0].axis('off')
         
         # Show prediction
-        axes[1, 1].imshow(images[0, :, :, mid_slice].T, cmap='gray')
-        pred_mask = np.ma.masked_where(prediction[:, :, mid_slice].T == 0, prediction[:, :, mid_slice].T)
-        axes[1, 1].imshow(pred_mask, cmap='jet', alpha=0.5)
+        axes[1, 1].imshow(overlay_rgb)
         axes[1, 1].set_title('Prediction Overlay')
         axes[1, 1].axis('off')
         
         # Show prediction only
-        axes[1, 2].imshow(prediction[:, :, mid_slice].T, cmap='nipy_spectral')
+        axes[1, 2].imshow(prediction_rgb)
         axes[1, 2].set_title('Prediction')
         axes[1, 2].axis('off')
-        
-        plt.suptitle(f'Case: {case_id}')
-        plt.tight_layout()
+
+        legend_handles = [
+            mpatches.Patch(
+                facecolor=np.array(REGION_DETAILS[label]["color"]) / 255.0,
+                edgecolor='white',
+                label=f"{REGION_DETAILS[label]['short']} ({region_percentages[label]:.1f}%)"
+            )
+            for label in REGION_ORDER
+        ]
+        fig.legend(
+            handles=legend_handles,
+            loc='lower center',
+            ncol=3,
+            bbox_to_anchor=(0.5, 0.065),
+            frameon=True,
+            facecolor='#111111',
+            edgecolor='#333333',
+            labelcolor='#f0f0f0'
+        )
+
+        fig.text(
+            0.5,
+            0.03,
+            'Percentages = share of the predicted tumor volume, not confidence. Green=NCR/NET, Yellow=Edema, Red=Enhancing.',
+            ha='center',
+            color='white',
+            fontsize=10,
+        )
+
+        plt.suptitle(f'Case: {case_id}', color='white')
+        plt.tight_layout(rect=[0, 0.11, 1, 0.96])
         
         fig_path = output_dir / f"{case_id}_visualization.png"
         plt.savefig(fig_path, dpi=150, bbox_inches='tight')

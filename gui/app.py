@@ -20,6 +20,7 @@ import sys
 import time
 import json
 import tempfile
+import textwrap
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, Tuple, Dict, List
@@ -32,7 +33,7 @@ import matplotlib.patches as mpatches
 from matplotlib.colors import ListedColormap
 import torch
 import torch.nn.functional as F
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 
 # Add parent directory to path to import src modules
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -70,6 +71,14 @@ CONFIG = {
         4: [255, 0, 0, 180]     # ET - Red
     }
 }
+
+REGION_ORDER = [1, 2, 4]
+REGION_DETAILS = {
+    1: {"short": "NCR/NET", "meaning": "necrotic core", "color_name": "Green"},
+    2: {"short": "ED", "meaning": "edema / swelling", "color_name": "Yellow"},
+    4: {"short": "ET", "meaning": "enhancing tumor", "color_name": "Red"},
+}
+MAX_SLICE_INDEX = 100
 
 EXPERIMENTS_DIR = PROJECT_ROOT / "experiments"
 
@@ -163,7 +172,7 @@ class MRAFNetModel:
             self.loaded = False
             return f"✗ Error loading model: {str(e)}"
 
-    def predict(self, images: np.ndarray) -> Tuple[np.ndarray, float, float]:
+    def predict(self, images: np.ndarray, batch_size: int = 16) -> Tuple[np.ndarray, float, float]:
         """Run prediction on preprocessed images.
 
         Returns:
@@ -179,16 +188,25 @@ class MRAFNetModel:
         t_start = time.perf_counter()
 
         with torch.no_grad():
-            # Convert to tensor: (C, H, W, D) -> (1, C, D, H, W)
+            # Convert to tensor: (C, H, W, D) -> (C, D, H, W)
             images_t = np.transpose(images, (0, 3, 1, 2))
-            tensor = torch.from_numpy(images_t).float().unsqueeze(0).to(self.device)
+            _, depth, height, width = images_t.shape
+            pred_np = np.zeros((depth, height, width), dtype=np.uint8)
 
-            output, _ = self.model(tensor)
-            if isinstance(output, tuple):
-                output = output[0]
+            for start_idx in range(0, depth, batch_size):
+                end_idx = min(start_idx + batch_size, depth)
+                batch = images_t[:, start_idx:end_idx, :, :]
+                tensor = torch.from_numpy(batch).float().unsqueeze(0).to(self.device)
 
-            pred = torch.argmax(F.softmax(output, dim=1), dim=1)
-            pred_np = pred.squeeze(0).cpu().numpy()
+                output, _ = self.model(tensor)
+                if isinstance(output, tuple):
+                    output = output[0]
+
+                pred = torch.argmax(F.softmax(output, dim=1), dim=1)
+                pred_np[start_idx:end_idx, :, :] = pred.squeeze(0).cpu().numpy()
+
+                if self.device == "cuda":
+                    torch.cuda.empty_cache()
 
             # Transpose back: (D, H, W) -> (H, W, D)
             pred_np = np.transpose(pred_np, (1, 2, 0))
@@ -262,6 +280,50 @@ def normalize_intensity(images: np.ndarray) -> np.ndarray:
     return normalized
 
 
+def validate_modality_shapes(
+    flair_data: np.ndarray,
+    t1_data: np.ndarray,
+    t1ce_data: np.ndarray,
+    t2_data: np.ndarray,
+    ground_truth: Optional[np.ndarray] = None,
+) -> Optional[str]:
+    """Validate that uploaded modalities share the same spatial shape."""
+    modality_shapes = {
+        "FLAIR": tuple(flair_data.shape),
+        "T1": tuple(t1_data.shape),
+        "T1ce": tuple(t1ce_data.shape),
+        "T2": tuple(t2_data.shape),
+    }
+
+    unique_shapes = set(modality_shapes.values())
+    if len(unique_shapes) != 1:
+        lines = [
+            "✗ Uploaded MRI modalities do not have the same shape.",
+            "",
+            "Detected shapes:",
+        ]
+        for name, shape in modality_shapes.items():
+            lines.append(f"- {name}: {shape}")
+        lines.extend([
+            "",
+            "Please upload the 4 modalities from the same case or resample them to a common space first.",
+        ])
+        return "\n".join(lines)
+
+    if ground_truth is not None and tuple(ground_truth.shape) != next(iter(unique_shapes)):
+        lines = [
+            "✗ Ground truth shape does not match the uploaded MRI modalities.",
+            "",
+            f"- MRI modalities: {next(iter(unique_shapes))}",
+            f"- Ground truth: {tuple(ground_truth.shape)}",
+            "",
+            "Please upload a ground-truth mask from the same case and space.",
+        ]
+        return "\n".join(lines)
+
+    return None
+
+
 def create_overlay_slice(mri_slice: np.ndarray,
                          seg_slice: np.ndarray,
                          alpha: float = 0.5) -> np.ndarray:
@@ -283,6 +345,127 @@ def create_overlay_slice(mri_slice: np.ndarray,
         )
 
     return (mri_rgb * 255).astype(np.uint8)
+
+
+def compute_region_percentages(segmentation: np.ndarray) -> Dict[int, float]:
+    """Return each tumor region as a share of the predicted tumor volume."""
+    unique, counts = np.unique(segmentation, return_counts=True)
+    label_counts = dict(zip(unique.astype(int), counts.astype(np.int64)))
+    tumor_total = sum(label_counts.get(label, 0) for label in REGION_ORDER)
+
+    if tumor_total == 0:
+        return {label: 0.0 for label in REGION_ORDER}
+
+    return {
+        label: (label_counts.get(label, 0) / tumor_total) * 100.0
+        for label in REGION_ORDER
+    }
+
+
+def build_slice_slider_update(total_slices: int, preferred_slice: int):
+    """Clamp the visible slice range for the UI slider."""
+    slider_max = min(MAX_SLICE_INDEX, max(0, int(total_slices) - 1))
+    slider_value = min(max(0, int(preferred_slice)), slider_max)
+    return gr.update(value=slider_value, maximum=slider_max)
+
+
+def _get_font(size: int):
+    """Best-effort font loader with a safe fallback."""
+    for font_name in ("arial.ttf", "DejaVuSans.ttf"):
+        try:
+            return ImageFont.truetype(font_name, size=size)
+        except OSError:
+            continue
+    return ImageFont.load_default()
+
+
+def render_labeled_output(
+    mri_slice: np.ndarray,
+    seg_slice: np.ndarray,
+    segmentation: np.ndarray,
+    view: str,
+    slice_idx: int,
+    total_slices: int,
+    show_overlay: bool,
+    alpha: float,
+) -> Image.Image:
+    """Render the output slice with an embedded legend and region-share note."""
+    if show_overlay:
+        base_np = create_overlay_slice(mri_slice, seg_slice, alpha)
+        title = "Predicted segmentation overlay"
+    else:
+        mri_norm = (mri_slice - mri_slice.min()) / (mri_slice.max() - mri_slice.min() + 1e-8)
+        base_np = (np.stack([mri_norm] * 3, axis=-1) * 255).astype(np.uint8)
+        title = "MRI slice"
+
+    region_percentages = compute_region_percentages(segmentation)
+    tumor_detected = any(region_percentages[label] > 0 for label in REGION_ORDER)
+    note = (
+        "Percentages = share of the predicted tumor volume, not model confidence."
+        if tumor_detected
+        else "No tumor voxels were predicted, so every region share stays at 0.0%."
+    )
+
+    canvas_width = max(base_np.shape[1], 430)
+    wrap_width = max(36, canvas_width // 8)
+    wrapped_note = textwrap.wrap(note, width=wrap_width)
+    footer_height = 88 + (len(wrapped_note) * 16)
+
+    base = Image.fromarray(base_np).convert("RGB")
+    image_x = (canvas_width - base.width) // 2
+    canvas = Image.new("RGB", (canvas_width, base.height + footer_height), color=(10, 10, 10))
+    canvas.paste(base, (image_x, 0))
+
+    draw = ImageDraw.Draw(canvas)
+    title_font = _get_font(18)
+    body_font = _get_font(15)
+    small_font = _get_font(12)
+
+    left_badge_right = min(image_x + base.width - 12, image_x + 260)
+    draw.rectangle((image_x + 12, 12, left_badge_right, 44), fill=(5, 5, 5), outline=(55, 55, 55))
+    draw.text((image_x + 22, 20), title, fill=(245, 245, 245), font=body_font)
+
+    slice_text = f"{view} slice {int(slice_idx) + 1}/{int(total_slices)}"
+    try:
+        text_width = draw.textbbox((0, 0), slice_text, font=body_font)[2]
+    except AttributeError:
+        text_width = len(slice_text) * 8
+    badge_left = max(image_x + 12, image_x + base.width - text_width - 28)
+    draw.rectangle((badge_left, 12, image_x + base.width - 12, 44), fill=(5, 5, 5), outline=(55, 55, 55))
+    draw.text((badge_left + 10, 20), slice_text, fill=(245, 245, 245), font=body_font)
+
+    footer_top = base.height
+    draw.rectangle((0, footer_top, canvas.width, canvas.height), fill=(14, 14, 14))
+    draw.line((0, footer_top, canvas.width, footer_top), fill=(45, 45, 45), width=2)
+    draw.text((14, footer_top + 10), "Colors and predicted tumor share", fill=(255, 255, 255), font=title_font)
+
+    column_width = (canvas.width - 28) // 3
+    for idx, label in enumerate(REGION_ORDER):
+        details = REGION_DETAILS[label]
+        color = tuple(CONFIG["colors"][label][:3])
+        x_left = 14 + (idx * column_width)
+        y_top = footer_top + 42
+
+        draw.rectangle((x_left, y_top + 2, x_left + 18, y_top + 20), fill=color, outline=(230, 230, 230))
+        draw.text(
+            (x_left + 28, y_top),
+            f"{details['short']}: {region_percentages[label]:.1f}%",
+            fill=(245, 245, 245),
+            font=body_font,
+        )
+        draw.text(
+            (x_left + 28, y_top + 20),
+            f"{details['color_name']} = {details['meaning']}",
+            fill=(185, 185, 185),
+            font=small_font,
+        )
+
+    note_y = footer_top + 70
+    for line in wrapped_note:
+        draw.text((14, note_y), line, fill=(175, 175, 175), font=small_font)
+        note_y += 14
+
+    return canvas
 
 
 def compute_tumor_metrics(
@@ -309,6 +492,13 @@ def compute_tumor_metrics(
         "enhancing_ml": round(vol_et, 2),
         "edema_ml": round(vol_ed, 2),
         "necrotic_ml": round(vol_ncr, 2),
+    }
+
+    total_tumor_ml = vol_ncr + vol_ed + vol_et
+    metrics["composition_pct"] = {
+        "ncr_net": round((vol_ncr / total_tumor_ml) * 100, 2) if total_tumor_ml else 0.0,
+        "edema": round((vol_ed / total_tumor_ml) * 100, 2) if total_tumor_ml else 0.0,
+        "enhancing": round((vol_et / total_tumor_ml) * 100, 2) if total_tumor_ml else 0.0,
     }
 
     metrics["inference_time"] = inference_time
@@ -380,10 +570,10 @@ def load_model_handler(checkpoint_path: str) -> str:
 def process_mri_files(flair_file, t1_file, t1ce_file, t2_file, gt_file=None):
     """Process uploaded MRI files and run segmentation."""
     if not all([flair_file, t1_file, t1ce_file, t2_file]):
-        return None, None, None, "⚠ Please upload all 4 MRI modalities"
+        return None, build_slice_slider_update(MAX_SLICE_INDEX + 1, 50), "⚠ Please upload all 4 MRI modalities"
 
     if not model.loaded:
-        return None, None, None, "✗ Please load a model first"
+        return None, build_slice_slider_update(MAX_SLICE_INDEX + 1, 50), "✗ Please load a model first"
 
     try:
         flair_data, affine = load_nifti(flair_file.name)
@@ -391,14 +581,18 @@ def process_mri_files(flair_file, t1_file, t1ce_file, t2_file, gt_file=None):
         t1ce_data, _ = load_nifti(t1ce_file.name)
         t2_data, _ = load_nifti(t2_file.name)
 
+        ground_truth = None
+        if gt_file is not None:
+            ground_truth, _ = load_nifti(gt_file.name)
+
+        shape_error = validate_modality_shapes(flair_data, t1_data, t1ce_data, t2_data, ground_truth)
+        if shape_error is not None:
+            return None, build_slice_slider_update(MAX_SLICE_INDEX + 1, 50), shape_error
+
         images = np.stack([flair_data, t1_data, t1ce_data, t2_data], axis=0)
         images_norm = normalize_intensity(images)
 
         segmentation, inference_time, peak_gpu_mb = model.predict(images_norm)
-
-        ground_truth = None
-        if gt_file is not None:
-            ground_truth, _ = load_nifti(gt_file.name)
 
         voxel_vol = float(np.abs(np.linalg.det(affine[:3, :3])))
         metrics = compute_tumor_metrics(
@@ -416,17 +610,23 @@ def process_mri_files(flair_file, t1_file, t1ce_file, t2_file, gt_file=None):
         }
 
         mid_slice = flair_data.shape[2] // 2
-        viz_image = create_overlay_slice(
+        viz_image = render_labeled_output(
             flair_data[:, :, mid_slice],
-            segmentation[:, :, mid_slice]
+            segmentation[:, :, mid_slice],
+            segmentation,
+            "Axial",
+            mid_slice,
+            flair_data.shape[2],
+            True,
+            0.5,
         )
 
         metrics_text = format_metrics(metrics)
-        return Image.fromarray(viz_image), mid_slice, flair_data.shape[2] - 1, metrics_text
+        return viz_image, build_slice_slider_update(flair_data.shape[2], mid_slice), metrics_text
 
     except Exception as e:
         import traceback
-        return None, None, None, f"✗ Error: {str(e)}\n{traceback.format_exc()}"
+        return None, build_slice_slider_update(MAX_SLICE_INDEX + 1, 50), f"✗ Error: {str(e)}\n{traceback.format_exc()}"
 
 
 def update_slice_view(slice_idx: int, view: str, show_overlay: bool, alpha: float):
@@ -440,22 +640,31 @@ def update_slice_view(slice_idx: int, view: str, show_overlay: bool, alpha: floa
     seg = stored_data["segmentation"]
 
     if view == "Axial":
-        mri_slice = flair[:, :, int(slice_idx)]
-        seg_slice = seg[:, :, int(slice_idx)]
+        total_slices = flair.shape[2]
+        idx = min(max(0, int(slice_idx)), total_slices - 1)
+        mri_slice = flair[:, :, idx]
+        seg_slice = seg[:, :, idx]
     elif view == "Coronal":
-        mri_slice = flair[:, int(slice_idx), :]
-        seg_slice = seg[:, int(slice_idx), :]
+        total_slices = flair.shape[1]
+        idx = min(max(0, int(slice_idx)), total_slices - 1)
+        mri_slice = flair[:, idx, :]
+        seg_slice = seg[:, idx, :]
     else:
-        mri_slice = flair[int(slice_idx), :, :]
-        seg_slice = seg[int(slice_idx), :, :]
+        total_slices = flair.shape[0]
+        idx = min(max(0, int(slice_idx)), total_slices - 1)
+        mri_slice = flair[idx, :, :]
+        seg_slice = seg[idx, :, :]
 
-    if show_overlay:
-        viz_image = create_overlay_slice(mri_slice, seg_slice, alpha)
-    else:
-        mri_norm = (mri_slice - mri_slice.min()) / (mri_slice.max() - mri_slice.min() + 1e-8)
-        viz_image = (np.stack([mri_norm] * 3, axis=-1) * 255).astype(np.uint8)
-
-    return Image.fromarray(viz_image)
+    return render_labeled_output(
+        mri_slice,
+        seg_slice,
+        seg,
+        view,
+        idx,
+        total_slices,
+        show_overlay,
+        alpha,
+    )
 
 
 def format_metrics(metrics: Dict) -> str:
@@ -470,6 +679,13 @@ def format_metrics(metrics: Dict) -> str:
     text += f"| Edema (ED) | {metrics['volume']['edema_ml']:.2f} |\n"
     text += f"| Necrotic (NCR) | {metrics['volume']['necrotic_ml']:.2f} |\n\n"
 
+    text += "### Predicted Tumor Composition\n"
+    text += "| Color | Region | Share of Predicted Tumor |\n|-------|--------|--------------------------|\n"
+    text += f"| Green | NCR/NET | {metrics['composition_pct']['ncr_net']:.2f}% |\n"
+    text += f"| Yellow | Edema | {metrics['composition_pct']['edema']:.2f}% |\n"
+    text += f"| Red | Enhancing | {metrics['composition_pct']['enhancing']:.2f}% |\n\n"
+    text += "Percentages above describe how the predicted tumor is split across regions. They are not confidence scores.\n\n"
+
     text += "### Performance\n"
     text += f"- **Inference Time:** {metrics['inference_time']:.3f} s\n"
     if metrics['peak_gpu_mb'] > 0:
@@ -478,8 +694,8 @@ def format_metrics(metrics: Dict) -> str:
 
     if "dice" in metrics:
         text += "### Evaluation Metrics\n"
-        text += "| Region | Dice | Sensitivity | Specificity | HD95 (mm) |\n"
-        text += "|--------|------|-------------|-------------|----------|\n"
+        text += "| Region | Dice (%) | Sensitivity (%) | Specificity (%) | HD95 (mm) |\n"
+        text += "|--------|----------|-----------------|-----------------|----------|\n"
         for key, label in [
             ("whole_tumor", "Whole Tumor"),
             ("tumor_core", "Tumor Core"),
@@ -489,8 +705,11 @@ def format_metrics(metrics: Dict) -> str:
             sens = metrics["sensitivity"][key]
             spec = metrics["specificity"][key]
             hd95 = metrics["hd95"][key]
-            text += f"| {label} | {dice:.4f} | {sens:.4f} | {spec:.4f} | {hd95} |\n"
-        text += f"\n**Mean Dice: {metrics['dice']['mean']:.4f}**\n"
+            text += f"| {label} | {dice * 100:.2f}% | {sens * 100:.2f}% | {spec * 100:.2f}% | {hd95} |\n"
+        text += f"\n**Mean Dice: {metrics['dice']['mean'] * 100:.2f}%**\n"
+        text += "\nThese percentages compare the prediction against the uploaded ground truth. They are accuracy metrics, not confidence.\n"
+    else:
+        text += "Upload a ground-truth mask to see Dice, Sensitivity, and Specificity percentages.\n"
 
     return text
 
@@ -510,7 +729,7 @@ def create_3d_plot():
     ax = fig.add_subplot(111, projection='3d')
     ax.set_facecolor('#0a0a0a')
 
-    colors = {1: '#ffffff', 2: '#aaaaaa', 4: '#555555'}
+    colors = {1: '#00ff00', 2: '#ffff00', 4: '#ff3030'}
     labels = {1: 'NCR/NET', 2: 'Edema', 4: 'Enhancing'}
 
     for label, color in colors.items():
@@ -677,9 +896,9 @@ def create_interface():
                         gr.HTML("""
                         <div class="legend-box">
                             <b style="color:#ffffff;">Legend:</b>&nbsp;&nbsp;
-                            <span style="color:#ffffff;border:1px solid #ffffff;padding:2px 8px;border-radius:2px;margin:0 4px;font-size:0.85em;">■ NCR/NET</span>
-                            <span style="color:#aaaaaa;border:1px solid #aaaaaa;padding:2px 8px;border-radius:2px;margin:0 4px;font-size:0.85em;">■ Edema</span>
-                            <span style="color:#666666;border:1px solid #666666;padding:2px 8px;border-radius:2px;margin:0 4px;font-size:0.85em;">■ Enhancing</span>
+                            <span style="color:#00ff00;border:1px solid #00ff00;padding:2px 8px;border-radius:2px;margin:0 4px;font-size:0.85em;">■ Green = NCR/NET</span>
+                            <span style="color:#ffff00;border:1px solid #ffff00;padding:2px 8px;border-radius:2px;margin:0 4px;font-size:0.85em;">■ Yellow = Edema</span>
+                            <span style="color:#ff3030;border:1px solid #ff3030;padding:2px 8px;border-radius:2px;margin:0 4px;font-size:0.85em;">■ Red = Enhancing</span>
                         </div>
                         """)
 
@@ -731,7 +950,8 @@ def create_interface():
                 - **Enhancing Tumor (ET)**: Label 4
 
                 ### Metrics Reported
-                - **Dice Score**: Overlap similarity (0–1, higher = better)
+                - **Region-share percentages on the image**: How much of the predicted tumor belongs to each color-coded region
+                - **Dice Score**: Overlap similarity with ground truth (higher = better)
                 - **Sensitivity**: True positive rate
                 - **Specificity**: True negative rate
                 - **HD95**: 95th percentile Hausdorff Distance in mm (lower = better)
@@ -780,7 +1000,7 @@ def create_interface():
         run_btn.click(
             fn=process_mri_files,
             inputs=[flair_input, t1_input, t1ce_input, t2_input, gt_input],
-            outputs=[output_image, slice_slider, slice_slider, metrics_output]
+            outputs=[output_image, slice_slider, metrics_output]
         )
 
         slice_slider.change(
