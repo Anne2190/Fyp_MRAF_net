@@ -8,7 +8,7 @@ FIXED: Memory-efficient Hausdorff distance computation
 """
 
 import numpy as np
-from typing import Dict, Tuple, Optional
+from typing import Dict, Tuple, Optional, List, Any
 from scipy.ndimage import binary_erosion, distance_transform_edt
 
 
@@ -43,7 +43,7 @@ def compute_dice(
     return float(dice)
 
 
-def get_surface_points(mask: np.ndarray, max_points: int = 10000) -> np.ndarray:
+def get_surface_points(mask: np.ndarray, max_points: int = 5000) -> np.ndarray:
     """
     Get surface (boundary) points of binary mask.
     
@@ -87,7 +87,7 @@ def compute_hausdorff95(
     pred: np.ndarray,
     target: np.ndarray,
     spacing: Tuple[float, float, float] = (1.0, 1.0, 1.0),
-    max_points: int = 10000
+    max_points: int = 5000
 ) -> float:
     """
     Compute 95th percentile Hausdorff Distance using memory-efficient approach.
@@ -461,6 +461,42 @@ def compute_metrics(
     return metrics
 
 
+def compute_confusion_matrix(
+    pred: np.ndarray,
+    target: np.ndarray,
+    num_classes: int = 4
+) -> np.ndarray:
+    """
+    Compute voxel-wise confusion matrix for a single volume using numpy.
+    
+    Labels:
+        0: Background
+        1: Necrotic and Non-enhancing tumor core (NCR/NET)
+        2: Peritumoral edema (ED)
+        3: Enhancing tumor (ET)
+    
+    Args:
+        pred: Prediction array (D, H, W)
+        target: Target array (D, H, W)
+        num_classes: Number of classes (0, 1, 2, 3)
+    
+    Returns:
+        Confusion matrix (num_classes, num_classes)
+    """
+    # Flatten arrays
+    pred_f = pred.flatten()
+    target_f = target.flatten()
+    
+    # Compute 2D histogram as confusion matrix
+    cm, _, _ = np.histogram2d(
+        target_f, pred_f, 
+        bins=(num_classes, num_classes), 
+        range=[[-0.5, num_classes-0.5], [-0.5, num_classes-0.5]]
+    )
+    
+    return cm.astype(np.int64)
+
+
 class MetricTracker:
     """
     Utility class for tracking metrics across batches/epochs.
@@ -474,16 +510,24 @@ class MetricTracker:
         self.metrics = {}
         self.counts = {}
     
-    def update(self, metrics: Dict[str, float]):
+    def update(self, metrics: Dict[str, Any]):
         """Add a batch of metrics."""
         for key, value in metrics.items():
             if key not in self.metrics:
-                self.metrics[key] = 0.0
+                # Initialize based on type
+                if isinstance(value, np.ndarray):
+                    self.metrics[key] = np.zeros_like(value)
+                else:
+                    self.metrics[key] = 0.0
                 self.counts[key] = 0
             
-            if value is not None and not np.isinf(value) and not np.isnan(value):
-                self.metrics[key] += value
-                self.counts[key] += 1
+            if value is not None:
+                if isinstance(value, np.ndarray):
+                    self.metrics[key] += value
+                    self.counts[key] += 1
+                elif not np.isinf(value) and not np.isnan(value):
+                    self.metrics[key] += value
+                    self.counts[key] += 1
     
     def get_average(self) -> Dict[str, float]:
         """Get average of all tracked metrics."""

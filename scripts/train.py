@@ -265,11 +265,18 @@ class Trainer:
                 
                 pbar.set_postfix({'loss': f'{loss_meter.avg:.4f}'})
                 
-                # Clear cache periodically to prevent memory buildup
-                if batch_idx % 10 == 0:
-                    torch.cuda.empty_cache()
-                    gc.collect()
+                # Clear cache and collect garbage after EACH batch to stay safe on laptop
+                torch.cuda.empty_cache()
+                gc.collect()
                     
+            except torch.cuda.OutOfMemoryError:
+                print(f"Warning: GPU OOM in validation batch {batch_idx}. Clearing cache and skipping.")
+                torch.cuda.empty_cache()
+                continue
+            except MemoryError:
+                print(f"Warning: System RAM MemoryError in validation batch {batch_idx}. Skipping.")
+                gc.collect()
+                continue
             except Exception as e:
                 print(f"Warning: Error in validation batch {batch_idx}: {e}")
                 continue

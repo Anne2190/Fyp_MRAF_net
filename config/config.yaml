@@ -68,7 +68,7 @@ training:
   batch_size: 1
   
   # Number of training epochs
-  epochs: 3   # 300
+  epochs: 300
   
   # Initial learning rate
   learning_rate: 0.0001
@@ -102,7 +102,7 @@ training:
   gradient_clip: 1.0
   
   # Number of data loader workers
-  num_workers: 4
+  num_workers: 2
   
   # Pin memory for faster data transfer to GPU
   pin_memory: true

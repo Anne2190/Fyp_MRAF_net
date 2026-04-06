@@ -27,10 +27,10 @@ from tqdm import tqdm
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.models.mraf_net import MRAFNet, create_model
-from src.data.dataset import BraTSDataset, get_case_ids
+from src.data.dataset import BraTSDataset, get_case_ids, find_file
 from src.data.preprocessing import normalize_intensity, remove_small_connected_components
 from src.utils.helpers import load_config, load_checkpoint, get_device, set_seed
-from src.utils.metrics import compute_metrics, MetricTracker
+from src.utils.metrics import compute_metrics, MetricTracker, compute_confusion_matrix
 
 
 class Evaluator:
@@ -296,6 +296,10 @@ class Evaluator:
             
             metrics = compute_metrics(pred, label_converted)
             result['metrics'] = metrics
+            
+            # Compute confusion matrix
+            cf_matrix = compute_confusion_matrix(pred, label_converted)
+            result['confusion_matrix'] = cf_matrix
         
         return result
     
@@ -325,7 +329,8 @@ class Evaluator:
         self,
         data_dir: str,
         output_dir: str = None,
-        save_predictions: bool = True
+        save_predictions: bool = True,
+        num_cases: int = None
     ) -> Dict:
         """
         Evaluate on entire dataset.
@@ -334,6 +339,7 @@ class Evaluator:
             data_dir: Path to dataset
             output_dir: Path to save predictions
             save_predictions: Whether to save predictions as NIfTI
+            num_cases: Number of cases to evaluate
         
         Returns:
             Dictionary of aggregate metrics
@@ -342,6 +348,8 @@ class Evaluator:
         
         # Get case IDs
         case_ids = get_case_ids(data_dir)
+        if num_cases:
+            case_ids = case_ids[:num_cases]
         print(f"Found {len(case_ids)} cases")
         
         # Output directory
@@ -361,15 +369,22 @@ class Evaluator:
             # Load images
             images = []
             for mod in modalities:
-                img_path = case_path / f"{case_id}_{mod}.nii.gz"
+                img_path = find_file(case_path, case_id, mod)
+                if img_path is None:
+                    print(f"Warning: Modality {mod} not found for case {case_id}")
+                    continue
                 img = nib.load(str(img_path))
                 images.append(img.get_fdata().astype(np.float32))
             
+            if len(images) < len(modalities):
+                print(f"Skipping case {case_id} due to missing modalities")
+                continue
+                
             images = np.stack(images, axis=0)
             
             # Load label if exists
-            seg_path = case_path / f"{case_id}_seg.nii.gz"
-            if seg_path.exists():
+            seg_path = find_file(case_path, case_id, 'seg')
+            if seg_path and seg_path.exists():
                 label_nii = nib.load(str(seg_path))
                 label = label_nii.get_fdata().astype(np.int64)
             else:
@@ -392,6 +407,9 @@ class Evaluator:
                     'case_id': case_id,
                     **result['metrics']
                 })
+                
+                if 'confusion_matrix' in result:
+                    metric_tracker.update({'confusion_matrix': result['confusion_matrix']})
         
         # Get aggregate metrics
         avg_metrics = metric_tracker.get_average()
@@ -419,7 +437,7 @@ class Evaluator:
                 json.dump({
                     'aggregate': avg_metrics,
                     'per_case': results
-                }, f, indent=2)
+                }, f, indent=2, default=lambda x: x.tolist() if isinstance(x, np.ndarray) else x)
             print(f"\nResults saved to {results_path}")
         
         return avg_metrics
@@ -435,8 +453,10 @@ def main():
                         help='Path to evaluation data')
     parser.add_argument('--output_dir', type=str, default='outputs/evaluation',
                         help='Path to save predictions')
-    parser.add_argument('--save_predictions', action='store_true',
-                        help='Save predictions as NIfTI files')
+    parser.add_argument('--num_cases', type=int, default=None,
+                        help='Number of cases to evaluate (default: all)')
+    parser.add_argument('--sw_batch_size', type=int, default=None,
+                        help='Sliding window batch size (default from config)')
     
     args = parser.parse_args()
     
@@ -445,6 +465,11 @@ def main():
         checkpoint_path=args.checkpoint,
         config_path=args.config
     )
+    
+    # Override sw_batch_size if provided
+    if args.sw_batch_size:
+        evaluator.config['inference']['sw_batch_size'] = args.sw_batch_size
+        print(f"Overriding sliding window batch size to {args.sw_batch_size}")
     
     # Get data directory from config if not specified
     if args.data_dir is None:
@@ -455,7 +480,8 @@ def main():
     evaluator.evaluate_dataset(
         data_dir=args.data_dir,
         output_dir=args.output_dir,
-        save_predictions=args.save_predictions
+        save_predictions=False, # default
+        num_cases=args.num_cases
     )
 
 
