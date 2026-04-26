@@ -9,6 +9,7 @@ This document provides a detailed overview of the MRAF-Net (Multi-Resolution Ali
 4. [Training Details & Methodology](#4-training-details--methodology)
 5. [Performance & Accuracy Metrics](#5-performance--accuracy-metrics)
 6. [Visualizations and Tumor Properties](#6-visualizations-and-tumor-properties)
+7. [Academic Defense (VIVA) Q&A Bank](#7-academic-defense-viva-qa-bank)
 
 ---
 
@@ -113,3 +114,48 @@ The project includes a standalone PyQt5 graphical interface (`gui/app.py`), empo
 **Are explicit tumor sizes defined artificially?**
 No. Brain tumors fluctuate drastically in both morphological shape and anatomical volume. 
 MRAF-Net compensates for this intrinsically. By leveraging multi-resolution cascading and the ASPP context module, the model organically learns to "zoom in" on small structural abnormalities, while retaining the macro perspective necessary to encompass massive tumor bodies. Furthermore, patch-based training ensures the network learns *texture and localized context* rather than attempting to memorize static structural coordinates.
+
+---
+
+## 7. Academic Defense (VIVA) Q&A Bank
+
+This section contains potential academic defense questions and expertly formulated answers covering the theoretical and practical dimensions of the MRAF-Net project.
+
+### The Problem Space & Dataset
+**Q1: Why did you choose the BraTS dataset over other medical imaging datasets?**
+**A:** BraTS is the global gold standard for brain tumor segmentation. It provides massive, multi-institutional, multi-modal, and expertly annotated 3D data. The challenge intrinsically forces the model to handle extreme class imbalance and diverse tumor morphologies, making it an excellent benchmark for deep learning robustness.
+
+**Q2: Why do you need 4 different MRI modalities? Couldn't you just use one?**
+**A:** No single modality captures the full tumor profile. 
+- **T1ce** (contrast-enhanced) highlights the active, enhancing tumor boundary (ET) because the contrast agent gathers where the blood-brain barrier is broken.
+- **FLAIR** suppresses the fluid signal but explicitly highlights the entire peritumoral edema (swelling).
+- Together, they allow the network to cross-reference structural anomalies to output precise, multi-class segmentations that one scan alone could never provide.
+
+### Architecture (MRAF-Net)
+**Q3: Your architecture is based on a 3D U-Net. Why use a 3D CNN instead of slicing the MRI into 2D images and using a 2D CNN?**
+**A:** Slicing a 3D brain scan into 2D images completely destroys spatial connectivity along the Z-axis (depth). Tumors are 3D volumetric masses. A 3D CNN preserves this depth continuity natively, significantly reducing false positives and eliminating jagged segmentations between sequential vertical slices.
+
+**Q4: Can you explain ASPP (Atrous Spatial Pyramid Pooling) and why it's critical for this project?**
+**A:** Brain tumors exhibit extreme scale variations—ranging from massive connected lobes to tiny scattered fragments. ASPP applies multiple parallel layers using "dilated" (atrous) convolutions (with rates of 6, 12, 18). This artificially expands the network's "field of view" to capture large surrounding contexts without aggressively down-sampling the image and losing resolution. It ensures the model identifies both huge targets and microscopic anomalies simultaneously.
+
+**Q5: What role do Attention Gates play in your decoder?**
+**A:** A standard U-Net blindly passes all low-level features (including healthy background tissue) straight across to the decoder via skip connections. Attention Gates act as a spatial filter. Using higher-level semantic features, they calculate an "attention map" that actively suppresses background noise and specifically highlights ambiguous tumor boundaries before merging the features.
+
+### Training & Optimization
+**Q6: Why did you use Patch-Based Training instead of passing the entire 3D brain volume at once?**
+**A:** Purely due to hardware limitations and dataset heterogeneity. A full 3D scan (`240x240x155` voxels) with 4 modalities requires enormous GPU VRAM (well beyond 24GB). By extracting smaller random patches (e.g., `96x96x96`), we allow the model to train efficiently on consumer-grade hardware (using ≤8GB VRAM) while actually improving the model's ability to learn localized textures instead of lazily memorizing global spatial coordinates.
+
+**Q7: Explain your loss function. Why not just use standard Cross-Entropy Loss?**
+**A:** Brain tumor datasets suffer from extreme class imbalance. Healthy background tissue (Class 0) makes up over 98% of the scan, while the tumor classes make up less than 2%. Standard Cross-Entropy would blindly predict "Background" everywhere to passively achieve 98% accuracy while entirely failing to segment the tumor.
+We use a **Hybrid `dice_ce` Loss**: 
+- **Dice Loss:** Maximizes the volumetric spatial overlap between the prediction and the ground truth (highly robust against background imbalance).
+- **Cross-Entropy (CE) Loss:** Ensures rigorous pixel-level classification accuracy is maintained.
+
+**Q8: What is Automatic Mixed Precision (AMP) and why use it?**
+**A:** Traditional deep learning uses FP32 (32-bit floating point precision). AMP automatically identifies operations that can safely run in FP16 (16-bit half-precision) without losing mathematical stability. This drastically cuts down GPU Memory usage by almost half and noticeably accelerates matrix multiplications on modern NVIDIA GPUs.
+
+### Evaluation Metrics
+**Q9: You've reported Dice Scores, but also HD95 (Hausdorff Distance 95). Why both?**
+**A:** 
+- The **Dice Score** tells us the volumetric overlap (e.g., "We got 90% of the bulk tumor body correct"). However, Dice is insensitive to structural boundaries.
+- **HD95** measures the maximum distance between the true boundary and our predicted boundary in millimeters (ignoring the top 5% extreme outliers to prevent statistical skew). In clinical settings (like surgically targeting radiation therapy), getting the boundary exactly right (low HD95) is just as critical as getting the bulk volume right.

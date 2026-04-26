@@ -1,54 +1,90 @@
 # MRAF-Net: Multi-Resolution Aligned and Robust Fusion Network for Brain Tumor Segmentation
 
-## Project Information
+## 📌 Project Information
 - **Author**: Anne Nidhusha Nithiyalan (w1985740)
 - **Supervisor**: Ms. Mohanadas Jananie
 - **Institution**: Informatics Institute of Technology / University of Westminster
+- **Programme**: BEng (Hons) Software Engineering
+- **Year**: 2026
 
-## Overview
-MRAF-Net is a deep learning architecture for automatic brain tumor segmentation from multimodal MRI scans (T1, T1ce, T2, FLAIR). The model addresses:
-1. Multi-resolution harmonization for standardizing MRI inputs
-2. Cross-modality feature alignment and fusion
-3. Edge-aware attention for precise tumor boundary detection
+---
 
-## System Requirements
+## 📖 Overview
+MRAF-Net is an advanced, highly specialized deep learning architecture designed for automatic brain tumor segmentation from multi-modal MRI scans. 
+
+Brain tumors are highly heterogeneous—varying drastically in shape, spatial location, and anatomical volume. MRAF-Net leverages a 3D U-Net backbone but introduces substantial architectural upgrades (ASPP, Attention Gates, Cross-Modality Fusion) to accurately identify and segment localized tumor sub-regions without needing rigid localization bounding boxes.
+
+---
+
+## 🧠 Dataset & Labeling
+
+### Dataset Origins
+The model utilizes the **BraTS 2020 (Brain Tumor Segmentation Challenge)** dataset. It consists of 3D Multimodal Magnetic Resonance Imaging (MRI) scans.
+The network fuses 4 distinct MRI sequences to comprehensively profile the tumor:
+- **T1** (T1-weighted)
+- **T1ce** (T1-weighted contrast-enhanced) - *Best for the active core*
+- **T2** (T2-weighted)
+- **FLAIR** (Fluid-Attenuated Inversion Recovery) - *Best for peritumoral edema*
+
+### Clinical Labeling
+The task is a **Semantic Segmentation** problem. The model outputs a voxel-level 3D mask where every pixel is classified into one of four categories:
+1. **Class 0 (Background):** Healthy Brain Tissue / Empty Space
+2. **Class 1 (NCR/NET):** Necrotic and Non-enhancing Core (dead tissue inside the tumor)
+3. **Class 2 (ED):** Peritumoral Edema (swelling around the tumor)
+4. **Class 4 / 3 (ET):** GD-Enhancing Tumor (highly active, growing boundaries)
+
+---
+
+## 🔬 Model Architecture
+
+MRAF-Net relies on state-of-the-art methodology tailored specifically for 3D medical images:
+
+1. **Hybrid Optimization:** Trained using a hybrid `dice_ce` loss function. It perfectly balances spatial overlap evaluation (Dice Loss) with voxel-wise precision (Cross-Entropy Loss) to mitigate severe class imbalance.
+2. **Multi-Resolution Harmonization:** A deep encoder extracts hierarchical features across 5 resolution levels (scaling from 32 to 320 channels).
+3. **Cross-Modality Fusion:** Iteratively merges the 4 MRI inputs early in the encoder to leverage the structural strengths of each sequence.
+4. **ASPP (Atrous Spatial Pyramid Pooling):** Located at the bottleneck with dilation rates of `[6, 12, 18]`. This handles massive variances in tumor size by expanding the network's receptive field organically.
+5. **Edge-Aware Attention Gates:** Positioned in the decoder, these drastically suppress background noise (healthy tissue) and enforce gradient updates exclusively on blurry, ambiguous tumor boundaries.
+6. **Deep Supervision:** Auxiliary outputs inject gradient signals directly into the intermediate decoder stages, dramatically accelerating network convergence.
+
+---
+
+## 🎨 Visualization & GUI
+
+MRAF-Net comes with a standalone **PyQt5 & Gradio Graphical User Interface (`gui/app.py`)** built for researchers and clinicians to visualize predictions dynamically.
+
+**What do the colors mean?**
+The predictions natively map the tumor regions to the following clinical color overlays:
+- 🟩 **<span style="color:green">Green</span> (Label 1):** Necrotic Core (NCR/NET) — Dead/inactive tissue at the center of the tumor.
+- 🟨 **<span style="color:yellow">Yellow</span> (Label 2):** Peritumoral Edema (ED) — Swelling and fluid accumulation surrounding the tumor.
+- 🟥 **<span style="color:red">Red</span> (Label 4):** Enhancing Tumor (ET) — Highly active, fast-growing, and aggressive tissue boundaries.
+
+---
+
+## 💻 System Requirements
 
 ### Hardware (Minimum)
-- **CPU**: Intel Core i5 or better
-- **RAM**: 16 GB (32 GB recommended)
+- **CPU**: Intel Core i5 or equivalent
+- **RAM**: 16 GB (32 GB highly recommended)
 - **GPU**: NVIDIA GPU with 6GB+ VRAM (8GB+ recommended)
-- **Storage**: 50 GB free space
+- **Storage**: 50 GB free space (SSD strongly recommended)
 
-### Hardware (Your Setup - From Proposal)
-- **CPU**: Intel Core i7
-- **RAM**: 32 GB
-- **Storage**: 1 TB SSD
-- **OS**: Windows 10
+---
 
-## Installation & Setup
+## ⚙️ Installation & Setup
 
 ### 1. Clone/Create Project Directory
 ```bash
-# Create project folder
 mkdir mraf_net
 cd mraf_net
 ```
 
 ### 2. Create Virtual Environment
-
-#### Windows (Command Prompt as Administrator):
+**Windows (Command Prompt as Administrator):**
 ```cmd
 python -m venv venv
 venv\Scripts\activate
 ```
-
-#### Windows (PowerShell):
-```powershell
-python -m venv venv
-.\venv\Scripts\Activate.ps1
-```
-
-#### Linux/Mac:
+**Linux / Mac / PowerShell:**
 ```bash
 python3 -m venv venv
 source venv/bin/activate
@@ -60,168 +96,112 @@ pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-### 4. Verify CUDA Installation (optional)
-```bash
-python -c "import torch; print(f'PyTorch: {torch.__version__}'); print(f'CUDA Available: {torch.cuda.is_available()}'); print(f'GPU: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"None\"}')"
-```
-
-### 5. Download and Prepare the Dataset
+### 4. Download and Prepare the Dataset
 1. Register at: https://www.med.upenn.edu/cbica/brats2020/registration.html
-2. Download the Training Data and extract it to:
-   `data/brats2020/MICCAI_BraTS2020_TrainingData/`
-
-3. Run the preparation script:
+2. Download the Training Data and extract it to: `data/brats2020/MICCAI_BraTS2020_TrainingData/`
+3. Run the data preparation script:
 ```bash
-python scripts/prepare_data.py \
-    --data_dir data/brats2020/MICCAI_BraTS2020_TrainingData
+python scripts/prepare_data.py --data_dir data/brats2020/MICCAI_BraTS2020_TrainingData
 ```
 
 ---
 
-## Running the Application
+## 🚀 Running the Pipeline
 
-The repository provides several command‑line entry points. All scripts live under `scripts/` and accept `--help` for a full list of options.
+All scripts reside under `scripts/` and accept `--help` for comprehensive options.
 
 ### 1. Training the Model
+We extensively use **Automatic Mixed Precision (AMP)** and **Gradient Checkpointing** to enable memory-efficient training on consumer laptops.
 ```bash
-# standard mode (uses settings from config/config.yaml)
+# Standard mode (uses settings from config/config.yaml)
 python scripts/train.py --config config/config.yaml
 
-# laptop mode (smaller batch/patches, mixed‑precision etc.)
+# Laptop mode (memory-optimized: batch_size=1, patches [64,64,64])
 python scripts/train.py --config config/config.yaml --mode laptop
 ```
-
-**Notes:**
-- `--mode` is optional; default is `standard`.
-- Training results (checkpoints, logs) are saved to a new folder under `experiments/`.
-- You can resume from a checkpoint by editing `config/config.yaml` or using the `checkpoint.resume` field.
+*Checkpoints and logs are automatically dumped into the `experiments/` directory.*
 
 ### 2. Evaluating a Checkpoint
 ```bash
 python scripts/evaluate.py \
-    --checkpoint experiments/<exp_name>/checkpoints/best_model.pth \
-    --sw_batch_size 1 \
-    --num_cases 5
+    --checkpoint experiments/<exp_name>/checkpoints/best_model.pth
 ```
 
-**New Options:**
-- `--sw_batch_size <int>`: Overrides the inference batch size (set to 1 for 8GB GPUs to avoid OOM).
-- `--num_cases <int>`: Optionally limits evaluation to a subset of cases for faster verification.
-- Supports both `.nii` and `.nii.gz` file formats automatically.
-
 ### 3. Running Inference / Prediction
+Runs sliding-window inference with Gaussian blending to generate smooth segmentations of entire scans.
 ```bash
 python scripts/predict.py \
     --checkpoint experiments/<exp_name>/checkpoints/best_model.pth \
     --input path/to/case_directory \
     --output predictions/
 ```
+*(The `--input` directory must contain the four modalities named: `flair.nii.gz`, `t1.nii.gz`, `t1ce.nii.gz`, `t2.nii.gz`)*
 
-- The `--input` directory should contain the four modalities (FLAIR, T1, T1ce, T2) named either `<case>_flair.nii.gz` (or `.nii`) or simply `flair.nii.gz`, etc.
-- Predictions are saved as NIfTI files in the `--output` folder.
-
-### 4. Starting the GUI (optional)
-A simple PyQt5 interface is provided in the `gui/` folder. After installing the packages listed in `gui/requirements.txt`:
+### 4. Starting the Interface (GUI)
 ```bash
 cd gui
-python app.py          # launch development GUI
-# or
-python standalone_gui.py   # run the bundled single‑file version
+python app.py          # Launch development GUI
 ```
-
-The GUI allows you to select a checkpoint and case directory from a file dialog and displays the segmentation overlay.
-
-### 5. Other Utilities
-- `scripts/prepare_data.py` – preprocess the dataset
-- `scripts/test_all.py` – run the unit/integration tests
-
-Each script supports `--help` for command‑line arguments.
+*The GUI runs on http://localhost:7860.*
 
 ---
 
-## Project Structure
-```
-
-## Project Structure
-```
+## 📁 Project Structure
+```text
 mraf_net/
-├── config/config.yaml       # Training configuration
-├── data/                    # Dataset directory
-├── src/                     # Source code
-│   ├── models/              # Neural network architectures
-│   ├── data/                # Data loading and preprocessing
-│   ├── losses/              # Loss functions
-│   └── utils/               # Helper utilities
-├── scripts/                 # Training and evaluation scripts
-├── checkpoints/             # Saved models
-├── logs/                    # Training logs
-└── outputs/                 # Results and visualizations
+├── config/config.yaml       # Master training configuration
+├── data/                    # Dataset directory containing BraTS files
+├── src/                     # Core Deep Learning Source Code
+│   ├── models/              # Neural networks (MRAF-Net, U-Net)
+│   ├── data/                # Data loaders, normalization, and patch extraction
+│   ├── losses/              # Loss functions (Dice, Cross-Entropy)
+│   └── utils/               # Helper utilities & Metric computations
+├── scripts/                 # Entry points (train.py, evaluate.py, predict.py)
+├── gui/                     # Front-end Interface code (Gradio/PyQt5)
+├── checkpoints/             # Fallback/Saved weights
+├── experiments/             # Live training outputs, models, and tensorboard logs
+└── outputs/                 # Inference NIfTI predictions and visualization PNGs
 ```
 
-## Training Tips for Local Laptop
+---
 
-### Memory Optimization
-1. **Reduce batch size**: Start with batch_size=1
-2. **Smaller patch size**: Use 96x96x96 instead of 128x128x128
-3. **Enable gradient checkpointing**: Saves memory at cost of speed
-4. **Mixed precision training**: Uses FP16 for faster training
+## 📈 Expected Results
 
-### If You Get CUDA Out of Memory Error:
-```yaml
-# In config/config.yaml, change:
-batch_size: 1
-patch_size: [96, 96, 96]
-use_amp: true
-gradient_checkpointing: true
-```
+Upon completion of 100-300 epochs, MRAF-Net achieves robust generalization metrics against clinical validation targets:
 
-## Final Performance Results (Achieved)
-The model was successfully trained for **217 epochs** using the optimized laptop mode. Evaluation of the best checkpoint yielded the following final metrics matching and exceeding the project benchmarks:
+| Target | Expected Dice Score |
+| :--- | :--- |
+| **WT (Whole Tumor)** | `0.88 - 0.91` |
+| **TC (Tumor Core)** | `0.82 - 0.86` |
+| **ET (Enhancing Tumor)** | `0.75 - 0.80` |
+| **Mean Dice** | `0.82 - 0.86` |
 
-| Region | Dice Score (DSC) | Benchmark Target | Status |
-| :--- | :--- | :--- | :--- |
-| **Mean Dice** | **87.39%** | 82-86% | 🏆 **Exceeded** |
-| Whole Tumor (WT) | 91.66% | 88-91% | ✅ **Passed** |
-| Tumor Core (TC) | **93.51%** | 82-86% | 🏆 **Exceeded** |
-| Enhancing Tumor (ET) | 87.66% | 75-80% | 🏆 **Exceeded** |
+---
 
-### Training History Summary
-- **Baseline:** 83.25% Mean Dice (Epoch 114)
-- **Midpoint:** 85.59% Mean Dice (Epoch 124)
-- **Final:** 87.39% Mean Dice (Epoch 214 - Best Checkpoint)
+## 🛠️ Troubleshooting
 
-## Troubleshooting
+- **CUDA Out of Memory:**
+  Edit `config/config.yaml`. Explicitly set `batch_size: 1`, reduce `patch_size` to `[64, 64, 64]`, and ensure `use_amp: true` and `gradient_checkpointing: true` are enabled.
+  
+- **CUDA Not Detected:**
+  Check NVIDIA drivers (`nvidia-smi`), completely uninstall PyTorch, and reinstall strictly with the correct index URL: 
+  `pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118`
+  
+- **Slow Training Pipeline:**
+  Data loading from HDDs can notoriously bottleneck 3D deep learning. Ensure `data_dir` resides on an SSD. Consider increasing `num_workers: 4` if your CPU permits.
 
-### Issue: CUDA not detected
-```bash
-# Check NVIDIA driver
-nvidia-smi
+---
 
-# Reinstall PyTorch with CUDA
-pip uninstall torch torchvision
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
-```
-
-### Issue: Out of Memory
-- Reduce `batch_size` to 1
-- Reduce `patch_size` to [64, 64, 64]
-- Enable `gradient_checkpointing: true`
-
-### Issue: Slow Training
-- Enable `use_amp: true` for mixed precision
-- Increase `num_workers` in dataloader
-- Use SSD storage for data
-
-## Citation
-If you use this code, please cite:
-```
-@thesis{nithiyalan2025mrafnet,
+## 📄 Citation
+If utilizing this codebase for academic endeavors, please cite:
+```bibtex
+@thesis{nithiyalan2026mrafnet,
   author = {Anne Nidhusha Nithiyalan},
   title = {MRAF-Net: Multi-Resolution Aligned and Robust Fusion Network for Brain Tumor Segmentation},
   school = {Informatics Institute of Technology / University of Westminster},
-  year = {2025}
+  year = {2026}
 }
 ```
 
-## License
-This project is for academic purposes only.
+## 📜 License
+This project is strictly designated for academic and research purposes only.
