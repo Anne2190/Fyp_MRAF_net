@@ -10,6 +10,7 @@ This document provides a detailed overview of the MRAF-Net (Multi-Resolution Ali
 5. [Performance & Accuracy Metrics](#5-performance--accuracy-metrics)
 6. [Visualizations and Tumor Properties](#6-visualizations-and-tumor-properties)
 7. [Academic Defense (VIVA) Q&A Bank](#7-academic-defense-viva-qa-bank)
+8. [Main Coding Related Q&A](#8-main-coding-related-qa)
 
 ---
 
@@ -159,3 +160,196 @@ We use a **Hybrid `dice_ce` Loss**:
 **A:** 
 - The **Dice Score** tells us the volumetric overlap (e.g., "We got 90% of the bulk tumor body correct"). However, Dice is insensitive to structural boundaries.
 - **HD95** measures the maximum distance between the true boundary and our predicted boundary in millimeters (ignoring the top 5% extreme outliers to prevent statistical skew). In clinical settings (like surgically targeting radiation therapy), getting the boundary exactly right (low HD95) is just as critical as getting the bulk volume right.
+
+---
+
+## 8. Main Coding Related Q&A
+
+This section focuses on implementation-level questions that may come up during code review, demonstration, or viva discussion.
+
+### GUI Data Flow
+
+**Q10: What is the main flow when the user runs segmentation from the GUI?**
+**A:** In `gui/app.py`, the GUI loads the uploaded NIfTI files, validates that all modalities have matching shapes, stacks the four modalities, normalizes intensities, runs model prediction, calculates metrics, stores the result, and renders the visualization.
+
+The important flow is:
+
+```python
+images = np.stack([flair_data, t1_data, t1ce_data, t2_data], axis=0)
+images_norm = normalize_intensity(images)
+segmentation, inference_time, peak_gpu_mb = model.predict(images_norm)
+```
+
+Then the predicted segmentation is passed into:
+
+```python
+metrics = compute_tumor_metrics(segmentation, ground_truth, voxel_vol, inference_time, peak_gpu_mb)
+```
+
+**Q11: Why are the four MRI modalities stacked before prediction?**
+**A:** The model expects a multi-channel 3D input. Each modality contributes different clinical information: FLAIR highlights edema, T1ce highlights enhancing tumor, and T1/T2 provide additional anatomical contrast. Stacking creates one tensor where the channel dimension contains `[FLAIR, T1, T1ce, T2]`.
+
+**Q12: Why does the code validate modality shapes before prediction?**
+**A:** All four modalities must describe the same patient volume with the same spatial dimensions. If one scan has a different shape, voxel positions no longer align correctly. The model would receive mismatched channels, and the segmentation could become invalid. Shape validation prevents that failure before inference.
+
+### GUI Controls
+
+**Q13: What do the `Axial`, `Coronal`, and `Sagittal` view options do in code?**
+**A:** They control which axis of the 3D MRI array is sliced for display.
+
+```python
+if view == "Axial":
+    mri_slice = flair[:, :, idx]
+elif view == "Coronal":
+    mri_slice = flair[:, idx, :]
+else:
+    mri_slice = flair[idx, :, :]
+```
+
+`Axial` shows top-to-bottom slices, `Coronal` shows front-to-back slices, and `Sagittal` shows left-to-right side slices.
+
+**Q14: What does the slice slider change?**
+**A:** The slice slider changes the index `idx` used to extract a 2D image from the 3D MRI volume. It affects only what the user sees in the visualization panel. It does not change the model prediction or calculated metrics.
+
+**Q15: What does overlay opacity do in code?**
+**A:** Opacity controls the blend between the grayscale MRI and the colored tumor mask. The code uses `alpha` to mix MRI intensity with the tumor color:
+
+```python
+mri_rgb[:, :, c][mask] = (
+    mri_rgb[:, :, c][mask] * (1 - alpha * overlay[:, :, 3][mask]) +
+    overlay[:, :, c][mask] * alpha * overlay[:, :, 3][mask]
+)
+```
+
+An opacity of `0` hides the overlay, `0.5` gives a balanced overlay, and `1` makes the tumor color strongest.
+
+### Labels, Colors, and Segmentation Output
+
+**Q16: What label values does the segmentation output use?**
+**A:** The GUI uses BraTS-style tumor labels:
+
+| Label | Meaning | Color |
+| --- | --- | --- |
+| `0` | Background | Transparent / black |
+| `1` | NCR/NET - Necrotic and non-enhancing tumor core | Green |
+| `2` | ED - Peritumoral edema | Yellow |
+| `4` | ET - Enhancing tumor | Red |
+
+These are configured in the `CONFIG` dictionary in `gui/app.py`.
+
+**Q17: Why is enhancing tumor sometimes label `4` and sometimes converted to label `3`?**
+**A:** BraTS ground-truth masks commonly use label `4` for Enhancing Tumor. Some metric helper functions internally expect classes as `0, 1, 2, 3`. Therefore, before metric calculation, the GUI converts label `4` into `3`:
+
+```python
+seg_int[seg_int == 4] = 3
+gt_int[gt_int == 4] = 3
+```
+
+This conversion is only for metric helper compatibility. The displayed and exported segmentation still follows the tumor label convention used by the GUI.
+
+### Tumor Volumes and Composition
+
+**Q18: How does the GUI calculate tumor volumes?**
+**A:** The GUI counts how many voxels are predicted for each tumor label, multiplies the count by the physical voxel volume, and converts cubic millimeters to milliliters.
+
+```python
+unique, counts = np.unique(segmentation, return_counts=True)
+vol_dict = dict(zip(unique.astype(int), counts))
+
+vol_ncr = vol_dict.get(1, 0) * voxel_volume / 1000
+vol_ed = vol_dict.get(2, 0) * voxel_volume / 1000
+vol_et = vol_dict.get(4, 0) * voxel_volume / 1000
+```
+
+The formula is:
+
+```text
+volume_ml = voxel_count * voxel_volume_mm3 / 1000
+```
+
+**Q19: Where does `voxel_volume` come from?**
+**A:** In `gui/app.py`, it is calculated from the NIfTI affine matrix:
+
+```python
+voxel_vol = float(np.abs(np.linalg.det(affine[:3, :3])))
+```
+
+The affine stores spatial scaling information. Taking the determinant of its 3D spatial part gives the physical volume of one voxel in cubic millimeters.
+
+**Q20: What do Whole Tumor, Tumor Core, Enhancing, Edema, and Necrotic volumes mean?**
+**A:** These are clinically meaningful groupings of tumor labels:
+
+| GUI Metric | Formula | Meaning |
+| --- | --- | --- |
+| Whole Tumor (`WT`) | `NCR/NET + Edema + Enhancing` | Total predicted tumor burden |
+| Tumor Core (`TC`) | `NCR/NET + Enhancing` | Core tumor region without edema |
+| Enhancing (`ET`) | `Enhancing` only | Active enhancing tissue |
+| Edema (`ED`) | `Edema` only | Swelling around the tumor |
+| Necrotic (`NCR`) | `NCR/NET` only | Dead or non-enhancing core tissue |
+
+**Q21: What does predicted tumor composition mean?**
+**A:** It is the percentage split of the predicted tumor volume. It tells how much of the predicted tumor is NCR/NET, Edema, and Enhancing.
+
+```python
+metrics["composition_pct"] = {
+    "ncr_net": round((vol_ncr / total_tumor_ml) * 100, 2) if total_tumor_ml else 0.0,
+    "edema": round((vol_ed / total_tumor_ml) * 100, 2) if total_tumor_ml else 0.0,
+    "enhancing": round((vol_et / total_tumor_ml) * 100, 2) if total_tumor_ml else 0.0,
+}
+```
+
+This is not model confidence. For example, `Edema = 60%` means 60% of the predicted tumor volume was classified as edema.
+
+**Q22: What happens if the model predicts no tumor voxels?**
+**A:** The code avoids division by zero. If total tumor volume is `0`, all composition values are returned as `0.0%`.
+
+### Evaluation Metrics
+
+**Q23: When does the GUI calculate Dice, Sensitivity, Specificity, and HD95?**
+**A:** These are calculated only when the user uploads a ground-truth segmentation mask. Without ground truth, the GUI can still show predicted volumes and composition, but it cannot compare the prediction against expert labels.
+
+**Q24: How does the GUI create the BraTS evaluation regions?**
+**A:** After converting label `4` to `3` for metric compatibility, the code calls:
+
+```python
+pred_wt, pred_tc, pred_et, tgt_wt, tgt_tc, tgt_et = compute_brats_regions(seg_int, gt_int)
+```
+
+This creates binary masks for:
+
+| Region | Labels |
+| --- | --- |
+| Whole Tumor | Tumor labels combined |
+| Tumor Core | Core tumor labels |
+| Enhancing Tumor | Enhancing tumor only |
+
+**Q25: Why are evaluation percentages different from predicted tumor composition percentages?**
+**A:** Predicted tumor composition is a breakdown of the model's own predicted tumor mask. Evaluation metrics compare the model prediction with the uploaded ground truth. Therefore, composition explains the prediction internally, while Dice/Sensitivity/Specificity/HD95 measure correctness against expert annotation.
+
+### Rendering and Export
+
+**Q26: Which function builds the card-based results dashboard?**
+**A:** `format_metrics(metrics)` in `gui/app.py` converts the calculated metrics dictionary into HTML cards. It renders tumor volume cards, predicted tumor composition rows, runtime cards, and optional evaluation cards when ground truth is available.
+
+**Q27: What does the 3D view use as input?**
+**A:** The 3D view uses the predicted segmentation mask stored after inference. It visualizes tumor label regions in 3D. In the standalone GUI, the segmentation is downsampled using slicing such as `[::3, ::3, ::3]` for faster plotting.
+
+**Q28: What does export save?**
+**A:** Export saves the predicted 3D segmentation mask as a NIfTI file. It saves label values, not the colored overlay image. This allows the segmentation to be reused in medical imaging tools.
+
+### Code Design and Reliability
+
+**Q29: Why does the GUI store `stored_data` globally after prediction?**
+**A:** The GUI needs access to the latest MRI volume and segmentation after the user changes slice, view, overlay, or opacity controls. Storing `flair`, `segmentation`, `ground_truth`, `affine`, and `metrics` lets callbacks update the visualization without re-running model inference.
+
+**Q30: Which file should be treated as the main source of truth for the GUI?**
+**A:** `gui/app.py` should be treated as the main full GUI implementation because it connects to the project source modules. `gui/standalone_gui.py` is useful for demonstrations because it is more self-contained.
+
+**Q31: Is there any difference in volume handling between `gui/app.py` and `gui/standalone_gui.py`?**
+**A:** Yes. `gui/app.py` passes the NIfTI-derived `voxel_volume` into `compute_tumor_metrics`, so tumor volume reflects physical voxel size. In `gui/standalone_gui.py`, `compute_advanced_metrics` currently divides voxel counts by `1000` directly, effectively assuming `1 mm3` per voxel for volume cards, while spacing is separately calculated for HD95. For the most accurate physical volume explanation, use the `gui/app.py` logic.
+
+**Q32: Why is normalization done before prediction?**
+**A:** MRI intensity values vary widely across scanners, patients, and modalities. Normalization standardizes the input scale so the model receives data closer to what it saw during training, improving stability and prediction quality.
+
+**Q33: Which values affect prediction and which values affect only visualization?**
+**A:** Uploaded modalities, model checkpoint, and normalization affect prediction. View, slice, overlay toggle, and opacity affect only visualization after prediction. Tumor volumes and composition are calculated from the predicted segmentation mask, so they do not change when the user changes view or opacity.
